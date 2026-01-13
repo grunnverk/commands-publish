@@ -693,7 +693,7 @@ export const execute = async (runConfig: Config): Promise<void> => {
 
         // STEP 2: Commit dependency updates if any (still no version bump)
         logger.verbose('DEPS_STAGING: Staging dependency updates for commit | Files: package.json | Command: git add | Note: Version bump not yet applied, package-lock.json ignored');
-        // Skip package-lock.json as it's in .gitignore to avoid Walmart registry refs
+        // Skip package-lock.json as it's in .gitignore to avoid private registry refs
         const filesToStage = 'package.json';
 
         // Wrap git operations with repository lock to prevent .git/index.lock conflicts
@@ -811,7 +811,7 @@ export const execute = async (runConfig: Config): Promise<void> => {
                                 const { stdout: mergeChangesStatus } = await run('git status --porcelain');
                                 if (mergeChangesStatus.trim()) {
                                     logger.verbose('POST_MERGE_CHANGES_DETECTED: Changes detected after npm install | Action: Staging for commit | Command: git add');
-                                    // Skip package-lock.json as it's in .gitignore to avoid Walmart registry refs
+                                    // Skip package-lock.json as it's in .gitignore to avoid private registry refs
                                     const filesToStagePostMerge = 'package.json';
                                     await run(`git add ${filesToStagePostMerge}`);
 
@@ -977,7 +977,7 @@ export const execute = async (runConfig: Config): Promise<void> => {
 
         // STEP 5: Commit version bump as a separate commit
         logger.verbose('Staging version bump for commit');
-        // Skip package-lock.json as it's in .gitignore to avoid Walmart registry refs
+        // Skip package-lock.json as it's in .gitignore to avoid private registry refs
         const filesToStageVersionBump = 'package.json';
 
         // Wrap git operations with lock
@@ -1477,7 +1477,7 @@ export const execute = async (runConfig: Config): Promise<void> => {
         try {
             const { stdout: newVersion } = await run(`npm version ${versionCommand} --preid=${versionTag} --no-git-tag-version`);
             logger.info(`PUBLISH_DEV_VERSION_BUMPED: Version bumped successfully | New Version: ${newVersion.trim()} | Type: development | Status: completed`);
-            
+
             // Manually commit the version bump (package-lock.json is ignored)
             await runGitWithLock(process.cwd(), async () => {
                 await run('git add package.json');

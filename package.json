@@ -1,6 +1,6 @@
 {
   "name": "@eldrforge/commands-publish",
-  "version": "0.1.4-dev.0",
+  "version": "0.1.4",
   "description": "Publishing workflow commands for kodrdriv (development, publish, release)",
   "main": "dist/index.js",
   "type": "module",

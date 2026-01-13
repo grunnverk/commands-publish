@@ -50,7 +50,7 @@
     "@eldrforge/github-tools": "^0.1.21",
     "@eldrforge/ai-service": "^0.1.21",
     "@eldrforge/shared": "^0.1.10",
-    "@riotprompt/riotprompt": "^0.0.10",
+    "@riotprompt/riotprompt": "^0.0.21",
     "openai": "^6.3.0",
     "semver": "^7.6.0",
     "dotenv": "^17.2.1"

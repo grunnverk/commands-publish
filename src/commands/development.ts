@@ -14,8 +14,9 @@
  * This is designed for reverse flow - taking you back to working for active development.
  */
 
-import { getDryRunLogger, Config, findDevelopmentBranch, KODRDRIV_DEFAULTS } from '@eldrforge/core';
-import { run, localBranchExists, getCurrentBranch } from '@eldrforge/git-tools';
+import { getDryRunLogger, Config, findDevelopmentBranch, KODRDRIV_DEFAULTS, incrementPatchVersion, incrementMinorVersion, incrementMajorVersion } from '@eldrforge/core';
+import { run, localBranchExists, getCurrentBranch, safeJsonParse, validatePackageJson } from '@eldrforge/git-tools';
+import { createStorage } from '@eldrforge/shared';
 
 /**
  * Create retroactive working branch tags for past releases
@@ -203,7 +204,7 @@ export const execute = async (runConfig: Config): Promise<string> => {
                 const gitStatus = await run('git status --porcelain');
                 if (gitStatus.stdout.trim()) {
                     await run('git add -A');
-                    await run('git commit -m "chore: update package-lock.json after merge"');
+                    await run('git commit -m "chore: update dependencies after merge"');
                 }
 
                 // Stay on working branch for development (removed checkout development)
@@ -302,9 +303,9 @@ export const execute = async (runConfig: Config): Promise<string> => {
                             // Check if npm install created changes
                             const gitStatus = await run('git status --porcelain');
                             if (gitStatus.stdout.trim()) {
-                                logger.info('DEV_POST_MERGE_COMMIT: Committing changes from npm install | Files: package-lock.json | Purpose: Finalize merge');
+                                logger.info('DEV_POST_MERGE_COMMIT: Committing changes from npm install | Purpose: Finalize merge');
                                 await run('git add -A');
-                                await run('git commit -m "chore: update package-lock.json after merge"');
+                                await run('git commit -m "chore: update dependencies after merge"');
                             }
                         } catch (mergeError: any) {
                             if (mergeError.message && mergeError.message.includes('CONFLICT')) {
@@ -350,10 +351,10 @@ export const execute = async (runConfig: Config): Promise<string> => {
                     // Check if npm install created any changes (e.g., package-lock.json)
                     const gitStatus = await run('git status --porcelain');
                     if (gitStatus.stdout.trim()) {
-                        logger.info('DEV_POST_MERGE_COMMIT: Committing changes from npm install | Files: package-lock.json | Purpose: Finalize merge');
+                        logger.info('DEV_POST_MERGE_COMMIT: Committing changes from npm install | Purpose: Finalize merge');
                         await run('git add -A');
                         await run(`git commit -m "chore: update package-lock.json after merge"`);
-                        logger.info('DEV_CHANGES_COMMITTED: Changes committed successfully | Files: package-lock.json | Status: committed');
+                        logger.info('DEV_CHANGES_COMMITTED: Changes committed successfully | Status: committed');
                     }
 
                 } catch (error: any) {
@@ -377,7 +378,7 @@ export const execute = async (runConfig: Config): Promise<string> => {
         } else {
             logger.info('DEV_DEV_MERGE_DRY_RUN: Would merge development if exists | Mode: dry-run | Source: development | Target: working');
             logger.info('DEV_INSTALL_DRY_RUN: Would run npm install after merge | Mode: dry-run | Command: npm install');
-            logger.info('DEV_COMMIT_DRY_RUN: Would commit npm install changes | Mode: dry-run | Files: package-lock.json');
+            logger.info('DEV_COMMIT_DRY_RUN: Would commit npm install changes | Mode: dry-run');
         }
 
         // Step 4.5: Create retroactive tags if requested (one-time operation)
@@ -465,25 +466,56 @@ export const execute = async (runConfig: Config): Promise<string> => {
             logger.info('Tagging disabled (--no-tag-working-branch)');
         }
 
-        // Step 6: Run npm version to bump version with increment level
-        let versionCommand: string;
+        // Step 6: Bump version manually to avoid npm version's automatic git add
+        // Note: npm version --no-git-tag-version still runs "git add package.json package-lock.json"
+        // which fails when package-lock.json is gitignored
         if (['patch', 'minor', 'major'].includes(incrementLevel)) {
-            versionCommand = `pre${incrementLevel}`;
-            logger.info(`DEV_VERSION_BUMPING: Bumping version with prerelease tag | Level: ${incrementLevel} | Tag: ${prereleaseTag} | Command: npm version`);
+            logger.info(`DEV_VERSION_BUMPING: Bumping version with prerelease tag | Level: ${incrementLevel} | Tag: ${prereleaseTag}`);
         } else {
-            // Explicit version like "3.5.0"
-            const cleanVersion = incrementLevel.replace(/^v/, '');
-            versionCommand = `${cleanVersion}-${prereleaseTag}.0`;
-            logger.info(`DEV_VERSION_EXPLICIT: Setting explicit version | Version: ${versionCommand} | Type: explicit`);
+            logger.info(`DEV_VERSION_EXPLICIT: Setting explicit version | Version: ${incrementLevel}-${prereleaseTag}.0 | Type: explicit`);
         }
 
         if (!isDryRun) {
             try {
-                const versionResult = ['patch', 'minor', 'major'].includes(incrementLevel)
-                    ? await run(`npm version ${versionCommand} --preid=${prereleaseTag}`)
-                    : await run(`npm version ${versionCommand}`);
-                const newVersion = versionResult.stdout.trim();
+                const storage = createStorage();
+                const pkgJsonContents = await storage.readFile('package.json', 'utf-8');
+                const pkgJson = safeJsonParse(pkgJsonContents, 'package.json');
+                const validatedPkgJson = validatePackageJson(pkgJson, 'package.json');
+                const currentVersion = validatedPkgJson.version;
+                
+                let newVersion: string;
+                if (['patch', 'minor', 'major'].includes(incrementLevel)) {
+                    // First increment the base version, then add prerelease tag
+                    let baseVersion: string;
+                    switch (incrementLevel) {
+                        case 'patch':
+                            baseVersion = incrementPatchVersion(currentVersion);
+                            break;
+                        case 'minor':
+                            baseVersion = incrementMinorVersion(currentVersion);
+                            break;
+                        case 'major':
+                            baseVersion = incrementMajorVersion(currentVersion);
+                            break;
+                        default:
+                            baseVersion = incrementPatchVersion(currentVersion);
+                    }
+                    newVersion = `${baseVersion}-${prereleaseTag}.0`;
+                } else {
+                    // Explicit version like "3.5.0"
+                    const cleanVersion = incrementLevel.replace(/^v/, '');
+                    newVersion = `${cleanVersion}-${prereleaseTag}.0`;
+                }
+                
+                // Update package.json with new version
+                validatedPkgJson.version = newVersion;
+                await storage.writeFile('package.json', JSON.stringify(validatedPkgJson, null, 2) + '\n', 'utf-8');
+                
                 logger.info(`DEV_VERSION_BUMPED: Version bumped successfully | New Version: ${newVersion} | Status: completed`);
+                
+                // Manually commit the version bump (package-lock.json is ignored)
+                await run('git add package.json');
+                await run(`git commit -m "chore: bump to ${newVersion}"`);
 
                 // Return appropriate message based on what actions were taken
                 if (mergedDevelopmentIntoWorking) {
@@ -503,9 +535,9 @@ export const execute = async (runConfig: Config): Promise<string> => {
             }
         } else {
             if (['patch', 'minor', 'major'].includes(incrementLevel)) {
-                logger.info(`Would run: npm version ${versionCommand} --preid=${prereleaseTag}`);
+                logger.info(`Would bump version with prerelease tag: ${incrementLevel} --preid=${prereleaseTag}`);
             } else {
-                logger.info(`Would run: npm version ${versionCommand}`);
+                logger.info(`Would set explicit version: ${incrementLevel}-${prereleaseTag}.0`);
             }
 
             // Return appropriate message based on what actions were taken

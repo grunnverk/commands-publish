@@ -411,13 +411,13 @@ const isReleaseNecessaryComparedToTarget = async (targetBranch: string, isDryRun
         return { necessary: true, reason: 'No detectable changes via diff; proceeding conservatively' };
     }
 
-    // If any files changed other than package.json or package-lock.json, a release is necessary
-    const nonVersionFiles = changedFiles.filter(f => f !== 'package.json' && f !== 'package-lock.json');
+    // If any files changed other than package.json (package-lock.json is gitignored), a release is necessary
+    const nonVersionFiles = changedFiles.filter(f => f !== 'package.json');
     if (nonVersionFiles.length > 0) {
         return { necessary: true, reason: `Changed files beyond version bump: ${nonVersionFiles.join(', ')}` };
     }
 
-    // Only package.json and/or package-lock.json changed. Verify package.json change is only the version field
+    // Only package.json changed. Verify package.json change is only the version field
     try {
         // Read package.json content from both branches
         const { stdout: basePkgStdout } = await runSecure('git', ['show', `${targetBranch}:package.json`]);
@@ -692,10 +692,9 @@ export const execute = async (runConfig: Config): Promise<void> => {
         await runWithDryRunSupport('npm run prepublishOnly', isDryRun, {}, true); // Use inherited stdio
 
         // STEP 2: Commit dependency updates if any (still no version bump)
-        logger.verbose('DEPS_STAGING: Staging dependency updates for commit | Files: package.json + package-lock.json | Command: git add | Note: Version bump not yet applied');
-        // Check if package-lock.json exists before trying to stage it
-        const packageLockExists = await storage.exists('package-lock.json');
-        const filesToStage = packageLockExists ? 'package.json package-lock.json' : 'package.json';
+        logger.verbose('DEPS_STAGING: Staging dependency updates for commit | Files: package.json | Command: git add | Note: Version bump not yet applied, package-lock.json ignored');
+        // Skip package-lock.json as it's in .gitignore to avoid private registry refs
+        const filesToStage = 'package.json';
 
         // Wrap git operations with repository lock to prevent .git/index.lock conflicts
         await runGitWithLock(process.cwd(), async () => {
@@ -764,8 +763,8 @@ export const execute = async (runConfig: Config): Promise<void> => {
 
                                     logger.verbose(`MERGE_CONFLICTS_LIST: Conflicted files detected | Files: ${conflicts.join(', ')} | Count: ${conflicts.length}`);
 
-                                    // Check if conflicts are only in package.json and package-lock.json
-                                    const versionFiles = ['package.json', 'package-lock.json'];
+                                    // Check if conflicts are only in package.json (package-lock.json is gitignored)
+                                    const versionFiles = ['package.json'];
                                     const nonVersionConflicts = conflicts.filter(f => !versionFiles.includes(f));
 
                                     if (nonVersionConflicts.length > 0) {
@@ -812,9 +811,8 @@ export const execute = async (runConfig: Config): Promise<void> => {
                                 const { stdout: mergeChangesStatus } = await run('git status --porcelain');
                                 if (mergeChangesStatus.trim()) {
                                     logger.verbose('POST_MERGE_CHANGES_DETECTED: Changes detected after npm install | Action: Staging for commit | Command: git add');
-                                    // Check if package-lock.json exists before trying to stage it
-                                    const packageLockExistsPostMerge = await storage.exists('package-lock.json');
-                                    const filesToStagePostMerge = packageLockExistsPostMerge ? 'package.json package-lock.json' : 'package.json';
+                                    // Skip package-lock.json as it's in .gitignore to avoid private registry refs
+                                    const filesToStagePostMerge = 'package.json';
                                     await run(`git add ${filesToStagePostMerge}`);
 
                                     if (await Diff.hasStagedChanges()) {
@@ -979,9 +977,8 @@ export const execute = async (runConfig: Config): Promise<void> => {
 
         // STEP 5: Commit version bump as a separate commit
         logger.verbose('Staging version bump for commit');
-        // Check if package-lock.json exists before trying to stage it
-        const packageLockExistsVersionBump = await storage.exists('package-lock.json');
-        const filesToStageVersionBump = packageLockExistsVersionBump ? 'package.json package-lock.json' : 'package.json';
+        // Skip package-lock.json as it's in .gitignore to avoid private registry refs
+        const filesToStageVersionBump = 'package.json';
 
         // Wrap git operations with lock
         await runGitWithLock(process.cwd(), async () => {
@@ -1476,10 +1473,32 @@ export const execute = async (runConfig: Config): Promise<void> => {
         }
 
         // Bump to next development version
-        logger.info(`PUBLISH_DEV_VERSION_BUMPING: Bumping to next development version | Command: ${versionCommand} | Tag: ${versionTag} | Purpose: Prepare for next cycle`);
+        // Note: We manually update package.json instead of using npm version to avoid
+        // npm's automatic "git add package.json package-lock.json" which fails when
+        // package-lock.json is gitignored
+        logger.info(`PUBLISH_DEV_VERSION_BUMPING: Bumping to next development version | Tag: ${versionTag} | Purpose: Prepare for next cycle`);
         try {
-            const { stdout: newVersion } = await run(`npm version ${versionCommand} --preid=${versionTag}`);
-            logger.info(`PUBLISH_DEV_VERSION_BUMPED: Version bumped successfully | New Version: ${newVersion.trim()} | Type: development | Status: completed`);
+            // Read current package.json
+            const pkgJsonContents = await storage.readFile('package.json', 'utf-8');
+            const pkgJson = safeJsonParse(pkgJsonContents, 'package.json');
+            const validatedPkgJson = validatePackageJson(pkgJson, 'package.json');
+            const currentVer = validatedPkgJson.version;
+            
+            // Import incrementPrereleaseVersion from core
+            const { incrementPrereleaseVersion } = await import('@eldrforge/core');
+            const newVersion = incrementPrereleaseVersion(currentVer, versionTag);
+            
+            // Update package.json with new version
+            validatedPkgJson.version = newVersion;
+            await storage.writeFile('package.json', JSON.stringify(validatedPkgJson, null, 2) + '\n', 'utf-8');
+            
+            logger.info(`PUBLISH_DEV_VERSION_BUMPED: Version bumped successfully | New Version: ${newVersion} | Type: development | Status: completed`);
+
+            // Manually commit the version bump (package-lock.json is ignored)
+            await runGitWithLock(process.cwd(), async () => {
+                await run('git add package.json');
+                await run(`git commit -m "chore: bump to ${newVersion}"`);
+            }, 'commit dev version bump');
         } catch (versionError: any) {
             logger.warn(`PUBLISH_DEV_VERSION_BUMP_FAILED: Failed to bump version | Error: ${versionError.message} | Impact: Version not updated`);
             logger.warn('PUBLISH_MANUAL_VERSION_BUMP: Manual version bump may be needed | Action: Bump manually for next cycle | Command: npm version');

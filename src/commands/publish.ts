@@ -1473,15 +1473,31 @@ export const execute = async (runConfig: Config): Promise<void> => {
         }
 
         // Bump to next development version
-        logger.info(`PUBLISH_DEV_VERSION_BUMPING: Bumping to next development version | Command: ${versionCommand} | Tag: ${versionTag} | Purpose: Prepare for next cycle`);
+        // Note: We manually update package.json instead of using npm version to avoid
+        // npm's automatic "git add package.json package-lock.json" which fails when
+        // package-lock.json is gitignored
+        logger.info(`PUBLISH_DEV_VERSION_BUMPING: Bumping to next development version | Tag: ${versionTag} | Purpose: Prepare for next cycle`);
         try {
-            const { stdout: newVersion } = await run(`npm version ${versionCommand} --preid=${versionTag} --no-git-tag-version`);
-            logger.info(`PUBLISH_DEV_VERSION_BUMPED: Version bumped successfully | New Version: ${newVersion.trim()} | Type: development | Status: completed`);
+            // Read current package.json
+            const pkgJsonContents = await storage.readFile('package.json', 'utf-8');
+            const pkgJson = safeJsonParse(pkgJsonContents, 'package.json');
+            const validatedPkgJson = validatePackageJson(pkgJson, 'package.json');
+            const currentVer = validatedPkgJson.version;
+            
+            // Import incrementPrereleaseVersion from core
+            const { incrementPrereleaseVersion } = await import('@eldrforge/core');
+            const newVersion = incrementPrereleaseVersion(currentVer, versionTag);
+            
+            // Update package.json with new version
+            validatedPkgJson.version = newVersion;
+            await storage.writeFile('package.json', JSON.stringify(validatedPkgJson, null, 2) + '\n', 'utf-8');
+            
+            logger.info(`PUBLISH_DEV_VERSION_BUMPED: Version bumped successfully | New Version: ${newVersion} | Type: development | Status: completed`);
 
             // Manually commit the version bump (package-lock.json is ignored)
             await runGitWithLock(process.cwd(), async () => {
                 await run('git add package.json');
-                await run(`git commit -m "chore: bump to ${newVersion.trim()}"`);
+                await run(`git commit -m "chore: bump to ${newVersion}"`);
             }, 'commit dev version bump');
         } catch (versionError: any) {
             logger.warn(`PUBLISH_DEV_VERSION_BUMP_FAILED: Failed to bump version | Error: ${versionError.message} | Impact: Version not updated`);

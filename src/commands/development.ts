@@ -203,7 +203,7 @@ export const execute = async (runConfig: Config): Promise<string> => {
                 const gitStatus = await run('git status --porcelain');
                 if (gitStatus.stdout.trim()) {
                     await run('git add -A');
-                    await run('git commit -m "chore: update package-lock.json after merge"');
+                    await run('git commit -m "chore: update dependencies after merge"');
                 }
 
                 // Stay on working branch for development (removed checkout development)
@@ -302,9 +302,9 @@ export const execute = async (runConfig: Config): Promise<string> => {
                             // Check if npm install created changes
                             const gitStatus = await run('git status --porcelain');
                             if (gitStatus.stdout.trim()) {
-                                logger.info('DEV_POST_MERGE_COMMIT: Committing changes from npm install | Files: package-lock.json | Purpose: Finalize merge');
+                                logger.info('DEV_POST_MERGE_COMMIT: Committing changes from npm install | Purpose: Finalize merge');
                                 await run('git add -A');
-                                await run('git commit -m "chore: update package-lock.json after merge"');
+                                await run('git commit -m "chore: update dependencies after merge"');
                             }
                         } catch (mergeError: any) {
                             if (mergeError.message && mergeError.message.includes('CONFLICT')) {
@@ -350,10 +350,10 @@ export const execute = async (runConfig: Config): Promise<string> => {
                     // Check if npm install created any changes (e.g., package-lock.json)
                     const gitStatus = await run('git status --porcelain');
                     if (gitStatus.stdout.trim()) {
-                        logger.info('DEV_POST_MERGE_COMMIT: Committing changes from npm install | Files: package-lock.json | Purpose: Finalize merge');
+                        logger.info('DEV_POST_MERGE_COMMIT: Committing changes from npm install | Purpose: Finalize merge');
                         await run('git add -A');
                         await run(`git commit -m "chore: update package-lock.json after merge"`);
-                        logger.info('DEV_CHANGES_COMMITTED: Changes committed successfully | Files: package-lock.json | Status: committed');
+                        logger.info('DEV_CHANGES_COMMITTED: Changes committed successfully | Status: committed');
                     }
 
                 } catch (error: any) {
@@ -377,7 +377,7 @@ export const execute = async (runConfig: Config): Promise<string> => {
         } else {
             logger.info('DEV_DEV_MERGE_DRY_RUN: Would merge development if exists | Mode: dry-run | Source: development | Target: working');
             logger.info('DEV_INSTALL_DRY_RUN: Would run npm install after merge | Mode: dry-run | Command: npm install');
-            logger.info('DEV_COMMIT_DRY_RUN: Would commit npm install changes | Mode: dry-run | Files: package-lock.json');
+            logger.info('DEV_COMMIT_DRY_RUN: Would commit npm install changes | Mode: dry-run');
         }
 
         // Step 4.5: Create retroactive tags if requested (one-time operation)

@@ -480,10 +480,14 @@ export const execute = async (runConfig: Config): Promise<string> => {
         if (!isDryRun) {
             try {
                 const versionResult = ['patch', 'minor', 'major'].includes(incrementLevel)
-                    ? await run(`npm version ${versionCommand} --preid=${prereleaseTag}`)
-                    : await run(`npm version ${versionCommand}`);
+                    ? await run(`npm version ${versionCommand} --preid=${prereleaseTag} --no-git-tag-version`)
+                    : await run(`npm version ${versionCommand} --no-git-tag-version`);
                 const newVersion = versionResult.stdout.trim();
                 logger.info(`DEV_VERSION_BUMPED: Version bumped successfully | New Version: ${newVersion} | Status: completed`);
+                
+                // Manually commit the version bump (package-lock.json is ignored)
+                await run('git add package.json');
+                await run(`git commit -m "chore: bump to ${newVersion}"`);
 
                 // Return appropriate message based on what actions were taken
                 if (mergedDevelopmentIntoWorking) {

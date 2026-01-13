@@ -1475,8 +1475,14 @@ export const execute = async (runConfig: Config): Promise<void> => {
         // Bump to next development version
         logger.info(`PUBLISH_DEV_VERSION_BUMPING: Bumping to next development version | Command: ${versionCommand} | Tag: ${versionTag} | Purpose: Prepare for next cycle`);
         try {
-            const { stdout: newVersion } = await run(`npm version ${versionCommand} --preid=${versionTag}`);
+            const { stdout: newVersion } = await run(`npm version ${versionCommand} --preid=${versionTag} --no-git-tag-version`);
             logger.info(`PUBLISH_DEV_VERSION_BUMPED: Version bumped successfully | New Version: ${newVersion.trim()} | Type: development | Status: completed`);
+            
+            // Manually commit the version bump (package-lock.json is ignored)
+            await runGitWithLock(process.cwd(), async () => {
+                await run('git add package.json');
+                await run(`git commit -m "chore: bump to ${newVersion.trim()}"`);
+            }, 'commit dev version bump');
         } catch (versionError: any) {
             logger.warn(`PUBLISH_DEV_VERSION_BUMP_FAILED: Failed to bump version | Error: ${versionError.message} | Impact: Version not updated`);
             logger.warn('PUBLISH_MANUAL_VERSION_BUMP: Manual version bump may be needed | Action: Bump manually for next cycle | Command: npm version');

@@ -411,6 +411,7 @@ export const execute = async (runConfig: Config): Promise<ReleaseSummary> => {
         milestoneIssues: milestoneIssuesContent,
         releaseFocus: runConfig.release?.focus,
         userContext: combinedContext || undefined,
+        targetVersion: runConfig.release?.version, // Pass explicit version if provided by publish command
         model: aiConfig.commands?.release?.model || aiConfig.model || 'gpt-4o',
         maxIterations: runConfig.release?.maxAgenticIterations || 30,
         debug: runConfig.debug,

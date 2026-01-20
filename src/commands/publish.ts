@@ -98,20 +98,20 @@ const checkGitignorePatterns = async (storage: any, isDryRun: boolean): Promise<
         const found = gitignoreLines.some(line => {
             // Exact match
             if (line === pattern) return true;
-            
+
             // Pattern with wildcard - check if the pattern or any matching line exists
             if (pattern.includes('*')) {
                 const basePattern = pattern.replace('*', '');
                 // Accept exact wildcard pattern, base pattern, or any line starting with base
                 return line === pattern || line === basePattern || line.startsWith(basePattern);
             }
-            
+
             // Pattern with trailing slash - check both with and without slash
             if (pattern.endsWith('/')) {
                 const basePattern = pattern.slice(0, -1);
                 return line === basePattern || line === pattern || line.startsWith(pattern);
             }
-            
+
             return false;
         });
 
@@ -1123,6 +1123,7 @@ export const execute = async (runConfig: Config): Promise<void> => {
         releaseConfig.release = {
             ...runConfig.release,
             currentBranch: currentBranch,  // Pass current branch
+            version: newVersion,  // Pass the target release version explicitly
             ...(runConfig.publish?.from && { from: runConfig.publish.from }),
             ...(runConfig.publish?.interactive && { interactive: runConfig.publish.interactive }),
             ...(runConfig.publish?.fromMain && { fromMain: runConfig.publish.fromMain })
@@ -1598,15 +1599,15 @@ export const execute = async (runConfig: Config): Promise<void> => {
             const pkgJson = safeJsonParse(pkgJsonContents, 'package.json');
             const validatedPkgJson = validatePackageJson(pkgJson, 'package.json');
             const currentVer = validatedPkgJson.version;
-            
+
             // Import incrementPrereleaseVersion from core
             const { incrementPrereleaseVersion } = await import('@eldrforge/core');
             const newVersion = incrementPrereleaseVersion(currentVer, versionTag);
-            
+
             // Update package.json with new version
             validatedPkgJson.version = newVersion;
             await storage.writeFile('package.json', JSON.stringify(validatedPkgJson, null, 2) + '\n', 'utf-8');
-            
+
             logger.info(`PUBLISH_DEV_VERSION_BUMPED: Version bumped successfully | New Version: ${newVersion} | Type: development | Status: completed`);
 
             // Manually commit the version bump (package-lock.json is ignored)

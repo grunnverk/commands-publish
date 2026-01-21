@@ -478,10 +478,28 @@ export const execute = async (runConfig: Config): Promise<string> => {
         if (!isDryRun) {
             try {
                 const storage = createStorage();
-                const pkgJsonContents = await storage.readFile('package.json', 'utf-8');
-                const pkgJson = safeJsonParse(pkgJsonContents, 'package.json');
-                const validatedPkgJson = validatePackageJson(pkgJson, 'package.json');
-                const currentVersion = validatedPkgJson.version;
+                
+                // CRITICAL FIX: After publish, we need to use the target branch's version as the base
+                // for incrementing, not the working branch's version (which might be an old dev version).
+                // This ensures that after publishing v0.0.15, we bump to 0.0.16-dev.0, not 0.0.15-dev.0.
+                const targetBranch = allBranchConfig && (allBranchConfig as any)[workingBranch]?.targetBranch || 'main';
+                let currentVersion: string;
+                
+                try {
+                    // Try to read version from target branch (main) to get the released version
+                    const targetPackageResult = await run(`git show ${targetBranch}:package.json`);
+                    const targetPackageJson = safeJsonParse(targetPackageResult.stdout, 'package.json from target branch');
+                    const validatedTargetPkg = validatePackageJson(targetPackageJson, 'package.json from target branch');
+                    currentVersion = validatedTargetPkg.version;
+                    logger.info(`DEV_VERSION_SOURCE: Using version from target branch | Branch: ${targetBranch} | Version: ${currentVersion} | Purpose: Ensure proper increment after release`);
+                } catch (error: any) {
+                    // Fallback: If target branch doesn't exist or can't be read, use current working branch version
+                    logger.warn(`DEV_VERSION_FALLBACK: Could not read version from target branch ${targetBranch} | Error: ${error.message} | Fallback: Using current branch version`);
+                    const pkgJsonContents = await storage.readFile('package.json', 'utf-8');
+                    const pkgJson = safeJsonParse(pkgJsonContents, 'package.json');
+                    const validatedPkgJson = validatePackageJson(pkgJson, 'package.json');
+                    currentVersion = validatedPkgJson.version;
+                }
                 
                 let newVersion: string;
                 if (['patch', 'minor', 'major'].includes(incrementLevel)) {
@@ -506,6 +524,11 @@ export const execute = async (runConfig: Config): Promise<string> => {
                     const cleanVersion = incrementLevel.replace(/^v/, '');
                     newVersion = `${cleanVersion}-${prereleaseTag}.0`;
                 }
+                
+                // Read current package.json from working branch to update
+                const pkgJsonContents = await storage.readFile('package.json', 'utf-8');
+                const pkgJson = safeJsonParse(pkgJsonContents, 'package.json');
+                const validatedPkgJson = validatePackageJson(pkgJson, 'package.json');
                 
                 // Update package.json with new version
                 validatedPkgJson.version = newVersion;

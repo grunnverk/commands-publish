@@ -43,6 +43,115 @@ const scanNpmrcForEnvVars = async (storage: any): Promise<string[]> => {
 };
 
 /**
+ * Checks if .gitignore contains required patterns to prevent publishing
+ * development artifacts and sensitive files.
+ */
+const checkGitignorePatterns = async (storage: any, isDryRun: boolean): Promise<void> => {
+    const logger = getDryRunLogger(isDryRun);
+    const gitignorePath = path.join(process.cwd(), '.gitignore');
+
+    // Required patterns that must be present in .gitignore
+    const requiredPatterns = [
+        'node_modules',
+        'dist',
+        'package-lock.json',
+        '.env',
+        'output/',
+        'coverage',
+        '.kodrdriv*'
+    ];
+
+    // Check if .gitignore exists
+    if (!await storage.exists(gitignorePath)) {
+        logger.error('GITIGNORE_MISSING: .gitignore file not found | Path: ' + gitignorePath + ' | Impact: Critical files may be committed');
+        logger.error('');
+        logger.error('GITIGNORE_REQUIRED: .gitignore is required for kodrdriv to work properly');
+        logger.error('GITIGNORE_PURPOSE: Prevents committing development artifacts and sensitive files');
+        logger.error('');
+        logger.error('GITIGNORE_CREATE: Create .gitignore with these patterns:');
+        for (const pattern of requiredPatterns) {
+            logger.error(`   ${pattern}`);
+        }
+        logger.error('');
+        throw new Error('.gitignore file is required but not found. Please create it with the required patterns.');
+    }
+
+    // Read .gitignore content
+    let gitignoreContent: string;
+    try {
+        gitignoreContent = await storage.readFile(gitignorePath, 'utf-8');
+    } catch (error: any) {
+        logger.error(`GITIGNORE_READ_FAILED: Unable to read .gitignore | Path: ${gitignorePath} | Error: ${error.message}`);
+        throw new Error(`Failed to read .gitignore: ${error.message}`);
+    }
+
+    // Parse .gitignore into lines, ignoring comments and empty lines
+    const gitignoreLines = gitignoreContent
+        .split('\n')
+        .map(line => line.trim())
+        .filter(line => line && !line.startsWith('#'));
+
+    // Check for missing patterns
+    const missingPatterns: string[] = [];
+    for (const pattern of requiredPatterns) {
+        // Check if the pattern exists in any of the gitignore lines
+        const found = gitignoreLines.some(line => {
+            // Exact match
+            if (line === pattern) return true;
+
+            // Pattern with wildcard - check if the pattern or any matching line exists
+            if (pattern.includes('*')) {
+                const basePattern = pattern.replace('*', '');
+                // Accept exact wildcard pattern, base pattern, or any line starting with base
+                return line === pattern || line === basePattern || line.startsWith(basePattern);
+            }
+
+            // Pattern with trailing slash - check both with and without slash
+            if (pattern.endsWith('/')) {
+                const basePattern = pattern.slice(0, -1);
+                return line === basePattern || line === pattern || line.startsWith(pattern);
+            }
+
+            // Line with trailing slash - check if it matches the pattern (e.g., "node_modules/" matches "node_modules")
+            if (line.endsWith('/')) {
+                const lineBase = line.slice(0, -1);
+                return lineBase === pattern || line.startsWith(pattern + '/');
+            }
+
+            return false;
+        });
+
+        if (!found) {
+            missingPatterns.push(pattern);
+        }
+    }
+
+    // Report missing patterns (relaxed check - allow variations)
+    const criticalMissing = missingPatterns.filter(p => !p.includes('coverage') && p !== 'package-lock.json');
+    if (criticalMissing.length > 0) {
+        logger.error('GITIGNORE_INCOMPLETE: Required patterns missing from .gitignore | Path: ' + gitignorePath + ' | Count: ' + criticalMissing.length);
+        logger.error('');
+        logger.error('GITIGNORE_MISSING_PATTERNS: The following patterns must be added to .gitignore:');
+        for (const pattern of criticalMissing) {
+            logger.error(`   ${pattern}`);
+        }
+        logger.error('');
+        logger.error('GITIGNORE_WHY_REQUIRED: These patterns are required because:');
+        logger.error('   node_modules     - Dependencies should not be committed');
+        logger.error('   dist             - Build artifacts should not be committed');
+        logger.error('   .env             - Environment variables may contain secrets');
+        logger.error('   output/          - Build output directory should not be committed');
+        logger.error('   .kodrdriv*       - kodrdriv internal files should not be committed');
+        logger.error('');
+        throw new Error(`Missing required .gitignore patterns: ${criticalMissing.join(', ')}. Please add them to your .gitignore file.`);
+    } else if (missingPatterns.length > 0) {
+        logger.warn('GITIGNORE_VARIATION: Some patterns have variations in .gitignore (acceptable) | Patterns: ' + missingPatterns.join(', '));
+    }
+
+    logger.verbose('GITIGNORE_VERIFIED: All required patterns present in .gitignore | Path: ' + gitignorePath + ' | Status: valid');
+};
+
+/**
  * Checks if package-lock.json contains file: dependencies (from npm link)
  * and cleans them up if found by removing package-lock.json and regenerating it.
  */
@@ -148,6 +257,14 @@ const runPrechecks = async (runConfig: Config, targetBranch?: string): Promise<v
     const storage = createStorage();
 
     logger.info('PRECHECK_STARTING: Executing publish prechecks | Phase: validation | Target: ' + (targetBranch || 'default'));
+
+    // Check .gitignore patterns first (critical requirement)
+    logger.info('PRECHECK_GITIGNORE: Verifying .gitignore contains required patterns | Requirement: Must ignore development artifacts and sensitive files');
+    if (isDryRun) {
+        logger.info('PRECHECK_GITIGNORE: Would verify .gitignore patterns | Mode: dry-run | Patterns: node_modules, dist, package-lock.json, .env, output/, coverage, .kodrdriv*');
+    } else {
+        await checkGitignorePatterns(storage, isDryRun);
+    }
 
     // Check if we're in a git repository
     try {
@@ -658,8 +775,12 @@ export const execute = async (runConfig: Config): Promise<void> => {
         logger.verbose('RELEASE_PREP_STARTING: Preparing for release | Phase: dependency management | Action: Switch from workspace to remote dependencies | Version Bump: Not yet applied');
 
         // Clean up any npm link references before updating dependencies
-        logger.verbose('NPM_LINK_CHECK: Scanning package-lock.json for npm link references | File: package-lock.json | Purpose: Remove development symlinks before publish');
-        await cleanupNpmLinkReferences(isDryRun);
+        if (!runConfig.publish?.skipLinkCleanup) {
+            logger.verbose('NPM_LINK_CHECK: Scanning package-lock.json for npm link references | File: package-lock.json | Purpose: Remove development symlinks before publish');
+            await cleanupNpmLinkReferences(isDryRun);
+        } else {
+            logger.verbose('NPM_LINK_CLEANUP_SKIPPED: Skipping package-lock cleanup (tree publish workflow) | Reason: package-lock.json not included in npm publish');
+        }
 
         // Update inter-project dependencies if --update-deps flag is present
         const updateDepsScope = runConfig.publish?.updateDeps;
@@ -682,10 +803,10 @@ export const execute = async (runConfig: Config): Promise<void> => {
         if (updatePatterns && updatePatterns.length > 0) {
             logger.verbose(`DEPS_UPDATE_PATTERNS: Updating dependencies matching specified patterns | Patterns: ${updatePatterns.join(', ')} | Count: ${updatePatterns.length} | Command: npm update`);
             const patternsArg = updatePatterns.join(' ');
-            await runWithDryRunSupport(`npm update ${patternsArg}`, isDryRun);
+            await runWithDryRunSupport(`npm update ${patternsArg} --legacy-peer-deps`, isDryRun);
         } else {
             logger.verbose('DEPS_UPDATE_ALL: No dependency patterns specified, updating all dependencies | Scope: all | Command: npm update');
-            await runWithDryRunSupport('npm update', isDryRun);
+            await runWithDryRunSupport('npm update --legacy-peer-deps', isDryRun);
         }
 
         logger.info('PREPUBLISH_SCRIPT_RUNNING: Executing prepublishOnly script | Script: prepublishOnly | Purpose: Run pre-flight checks (clean, lint, build, test)');
@@ -1008,6 +1129,7 @@ export const execute = async (runConfig: Config): Promise<void> => {
         releaseConfig.release = {
             ...runConfig.release,
             currentBranch: currentBranch,  // Pass current branch
+            version: newVersion,  // Pass the target release version explicitly
             ...(runConfig.publish?.from && { from: runConfig.publish.from }),
             ...(runConfig.publish?.interactive && { interactive: runConfig.publish.interactive }),
             ...(runConfig.publish?.fromMain && { fromMain: runConfig.publish.fromMain })
@@ -1483,15 +1605,15 @@ export const execute = async (runConfig: Config): Promise<void> => {
             const pkgJson = safeJsonParse(pkgJsonContents, 'package.json');
             const validatedPkgJson = validatePackageJson(pkgJson, 'package.json');
             const currentVer = validatedPkgJson.version;
-            
+
             // Import incrementPrereleaseVersion from core
             const { incrementPrereleaseVersion } = await import('@eldrforge/core');
             const newVersion = incrementPrereleaseVersion(currentVer, versionTag);
-            
+
             // Update package.json with new version
             validatedPkgJson.version = newVersion;
             await storage.writeFile('package.json', JSON.stringify(validatedPkgJson, null, 2) + '\n', 'utf-8');
-            
+
             logger.info(`PUBLISH_DEV_VERSION_BUMPED: Version bumped successfully | New Version: ${newVersion} | Type: development | Status: completed`);
 
             // Manually commit the version bump (package-lock.json is ignored)

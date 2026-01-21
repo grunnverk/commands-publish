@@ -68,6 +68,7 @@ export default defineConfig({
                 // External packages
                 '@eldrforge/core',
                 '@eldrforge/commands-git',
+                '@eldrforge/commands-tree',
                 '@eldrforge/git-tools',
                 '@eldrforge/github-tools',
                 '@eldrforge/ai-service',

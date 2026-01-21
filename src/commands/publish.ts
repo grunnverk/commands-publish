@@ -112,6 +112,12 @@ const checkGitignorePatterns = async (storage: any, isDryRun: boolean): Promise<
                 return line === basePattern || line === pattern || line.startsWith(pattern);
             }
 
+            // Line with trailing slash - check if it matches the pattern (e.g., "node_modules/" matches "node_modules")
+            if (line.endsWith('/')) {
+                const lineBase = line.slice(0, -1);
+                return lineBase === pattern || line.startsWith(pattern + '/');
+            }
+
             return false;
         });
 
@@ -797,10 +803,10 @@ export const execute = async (runConfig: Config): Promise<void> => {
         if (updatePatterns && updatePatterns.length > 0) {
             logger.verbose(`DEPS_UPDATE_PATTERNS: Updating dependencies matching specified patterns | Patterns: ${updatePatterns.join(', ')} | Count: ${updatePatterns.length} | Command: npm update`);
             const patternsArg = updatePatterns.join(' ');
-            await runWithDryRunSupport(`npm update ${patternsArg}`, isDryRun);
+            await runWithDryRunSupport(`npm update ${patternsArg} --legacy-peer-deps`, isDryRun);
         } else {
             logger.verbose('DEPS_UPDATE_ALL: No dependency patterns specified, updating all dependencies | Scope: all | Command: npm update');
-            await runWithDryRunSupport('npm update', isDryRun);
+            await runWithDryRunSupport('npm update --legacy-peer-deps', isDryRun);
         }
 
         logger.info('PREPUBLISH_SCRIPT_RUNNING: Executing prepublishOnly script | Script: prepublishOnly | Purpose: Run pre-flight checks (clean, lint, build, test)');

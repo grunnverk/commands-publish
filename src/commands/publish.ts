@@ -1,14 +1,14 @@
 /* eslint-disable @typescript-eslint/no-unused-vars */
 import path from 'path';
-import * as Commit from '@eldrforge/commands-git';
+import * as Commit from '@grunnverk/commands-git';
 import * as Release from './release';
 import fs from 'fs/promises';
 
-import { getLogger, getDryRunLogger, Config, PullRequest, Diff, getOutputPath, checkIfTagExists, confirmVersionInteractively, calculateBranchDependentVersion, DEFAULT_OUTPUT_DIRECTORY, KODRDRIV_DEFAULTS, runGitWithLock, filterContent } from '@eldrforge/core';
-import { run, runWithDryRunSupport, runSecure, validateGitRef, safeJsonParse, validatePackageJson, isBranchInSyncWithRemote, safeSyncBranchWithRemote, localBranchExists, remoteBranchExists } from '@eldrforge/git-tools';
-import * as GitHub from '@eldrforge/github-tools';
-import { createStorage, incrementPatchVersion, calculateTargetVersion } from '@eldrforge/shared';
-import { runAgenticPublish, formatAgenticPublishResult } from '@eldrforge/ai-service';
+import { getLogger, getDryRunLogger, Config, PullRequest, Diff, getOutputPath, checkIfTagExists, confirmVersionInteractively, calculateBranchDependentVersion, DEFAULT_OUTPUT_DIRECTORY, KODRDRIV_DEFAULTS, runGitWithLock, filterContent } from '@grunnverk/core';
+import { run, runWithDryRunSupport, runSecure, validateGitRef, safeJsonParse, validatePackageJson, isBranchInSyncWithRemote, safeSyncBranchWithRemote, localBranchExists, remoteBranchExists } from '@grunnverk/git-tools';
+import * as GitHub from '@grunnverk/github-tools';
+import { createStorage, incrementPatchVersion, calculateTargetVersion } from '@grunnverk/shared';
+import { runAgenticPublish, formatAgenticPublishResult } from '@grunnverk/ai-service';
 
 const scanNpmrcForEnvVars = async (storage: any): Promise<string[]> => {
     const logger = getLogger();
@@ -787,7 +787,7 @@ export const execute = async (runConfig: Config): Promise<void> => {
         const updateDepsScope = runConfig.publish?.updateDeps;
         if (updateDepsScope) {
             logger.info(`INTER_PROJECT_DEPS_UPDATE: Updating inter-project dependencies | Scope: ${updateDepsScope} | Type: inter-project | Command: kodrdriv updates`);
-            const Updates = await import('@eldrforge/commands-tree');
+            const Updates = await import('@grunnverk/commands-tree');
             const updatesConfig: Config = {
                 ...runConfig,
                 dryRun: isDryRun,
@@ -995,7 +995,7 @@ export const execute = async (runConfig: Config): Promise<void> => {
 
             // Smart tag conflict handling
             if (tagExists) {
-                const { getNpmPublishedVersion, getTagInfo } = await import('@eldrforge/core');
+                const { getNpmPublishedVersion, getTagInfo } = await import('@grunnverk/core');
 
                 logger.warn(`TAG_ALREADY_EXISTS: Tag already exists in repository | Tag: ${targetTagName} | Status: conflict | Action: Check npm registry`);
 
@@ -1042,7 +1042,7 @@ export const execute = async (runConfig: Config): Promise<void> => {
                         logger.info('PUBLISH_FORCE_REPUBLISH: Force republish mode enabled | Action: Deleting existing tag | Tag: ' + targetTagName + ' | Purpose: Allow republish');
 
                         if (!isDryRun) {
-                            const { runSecure } = await import('@eldrforge/git-tools');
+                            const { runSecure } = await import('@grunnverk/git-tools');
 
                             // Delete local tag
                             try {
@@ -1076,7 +1076,7 @@ export const execute = async (runConfig: Config): Promise<void> => {
                 const confirmedTagExists = await checkIfTagExists(confirmedTagName);
 
                 if (confirmedTagExists) {
-                    const { getNpmPublishedVersion } = await import('@eldrforge/core');
+                    const { getNpmPublishedVersion } = await import('@grunnverk/core');
                     const npmVersion = await getNpmPublishedVersion(packageJson.name);
 
                     if (npmVersion === newVersion) {
@@ -1652,7 +1652,7 @@ export const execute = async (runConfig: Config): Promise<void> => {
             const currentVer = validatedPkgJson.version;
 
             // Import incrementPrereleaseVersion from core
-            const { incrementPrereleaseVersion } = await import('@eldrforge/core');
+            const { incrementPrereleaseVersion } = await import('@grunnverk/core');
             const newVersion = incrementPrereleaseVersion(currentVer, versionTag);
 
             // Update package.json with new version

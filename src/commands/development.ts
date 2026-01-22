@@ -14,9 +14,9 @@
  * This is designed for reverse flow - taking you back to working for active development.
  */
 
-import { getDryRunLogger, Config, findDevelopmentBranch, KODRDRIV_DEFAULTS, incrementPatchVersion, incrementMinorVersion, incrementMajorVersion } from '@eldrforge/core';
-import { run, localBranchExists, getCurrentBranch, safeJsonParse, validatePackageJson } from '@eldrforge/git-tools';
-import { createStorage } from '@eldrforge/shared';
+import { getDryRunLogger, Config, findDevelopmentBranch, KODRDRIV_DEFAULTS, incrementPatchVersion, incrementMinorVersion, incrementMajorVersion } from '@grunnverk/core';
+import { run, localBranchExists, getCurrentBranch, safeJsonParse, validatePackageJson } from '@grunnverk/git-tools';
+import { createStorage } from '@grunnverk/shared';
 
 /**
  * Create retroactive working branch tags for past releases
@@ -478,13 +478,13 @@ export const execute = async (runConfig: Config): Promise<string> => {
         if (!isDryRun) {
             try {
                 const storage = createStorage();
-                
+
                 // CRITICAL FIX: After publish, we need to use the target branch's version as the base
                 // for incrementing, not the working branch's version (which might be an old dev version).
                 // This ensures that after publishing v0.0.15, we bump to 0.0.16-dev.0, not 0.0.15-dev.0.
                 const targetBranch = allBranchConfig && (allBranchConfig as any)[workingBranch]?.targetBranch || 'main';
                 let currentVersion: string;
-                
+
                 try {
                     // Try to read version from target branch (main) to get the released version
                     const targetPackageResult = await run(`git show ${targetBranch}:package.json`);
@@ -500,7 +500,7 @@ export const execute = async (runConfig: Config): Promise<string> => {
                     const validatedPkgJson = validatePackageJson(pkgJson, 'package.json');
                     currentVersion = validatedPkgJson.version;
                 }
-                
+
                 let newVersion: string;
                 if (['patch', 'minor', 'major'].includes(incrementLevel)) {
                     // First increment the base version, then add prerelease tag
@@ -524,18 +524,18 @@ export const execute = async (runConfig: Config): Promise<string> => {
                     const cleanVersion = incrementLevel.replace(/^v/, '');
                     newVersion = `${cleanVersion}-${prereleaseTag}.0`;
                 }
-                
+
                 // Read current package.json from working branch to update
                 const pkgJsonContents = await storage.readFile('package.json', 'utf-8');
                 const pkgJson = safeJsonParse(pkgJsonContents, 'package.json');
                 const validatedPkgJson = validatePackageJson(pkgJson, 'package.json');
-                
+
                 // Update package.json with new version
                 validatedPkgJson.version = newVersion;
                 await storage.writeFile('package.json', JSON.stringify(validatedPkgJson, null, 2) + '\n', 'utf-8');
-                
+
                 logger.info(`DEV_VERSION_BUMPED: Version bumped successfully | New Version: ${newVersion} | Status: completed`);
-                
+
                 // Manually commit the version bump (package-lock.json is ignored)
                 await run('git add package.json');
                 await run(`git commit -m "chore: bump to ${newVersion}"`);

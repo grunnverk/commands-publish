@@ -1,11 +1,11 @@
-# @eldrforge/commands-publish
+# @grunnverk/commands-publish
 
 Publishing workflow commands for kodrdriv - development, publish, and release.
 
 ## Installation
 
 ```bash
-npm install @eldrforge/commands-publish
+npm install @grunnverk/commands-publish
 ```
 
 ## Commands
@@ -37,7 +37,7 @@ kodrdriv release
 ## Usage
 
 ```typescript
-import { development, publish, release } from '@eldrforge/commands-publish';
+import { development, publish, release } from '@grunnverk/commands-publish';
 
 // Execute development command
 await development(config);
@@ -51,11 +51,11 @@ await release(config);
 
 ## Dependencies
 
-- `@eldrforge/core` - Core utilities and types
-- `@eldrforge/commands-git` - Git workflow commands
-- `@eldrforge/git-tools` - Git operations
-- `@eldrforge/github-tools` - GitHub API interactions
-- `@eldrforge/ai-service` - AI-powered content generation
+- `@grunnverk/core` - Core utilities and types
+- `@grunnverk/commands-git` - Git workflow commands
+- `@grunnverk/git-tools` - Git operations
+- `@grunnverk/github-tools` - GitHub API interactions
+- `@grunnverk/ai-service` - AI-powered content generation
 
 ## License
 

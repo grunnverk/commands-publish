@@ -2,7 +2,7 @@
 import { Formatter, Model } from '@riotprompt/riotprompt';
 import 'dotenv/config';
 import type { ChatCompletionMessageParam } from 'openai/resources';
-import { getDefaultFromRef, getCurrentBranch, safeJsonParse } from '@eldrforge/git-tools';
+import { getDefaultFromRef, getCurrentBranch, safeJsonParse } from '@grunnverk/git-tools';
 import {
     Config,
     Log,
@@ -24,7 +24,7 @@ import {
     ReleaseSummary,
     filterContent,
     type LLMImprovementConfig,
-} from '@eldrforge/core';
+} from '@grunnverk/core';
 import {
     createCompletionWithRetry,
     getUserChoice,
@@ -36,9 +36,9 @@ import {
     runAgenticRelease,
     generateReflectionReport,
     createReleasePrompt,
-} from '@eldrforge/ai-service';
-import { createStorage } from '@eldrforge/shared';
-import * as GitHub from '@eldrforge/github-tools';
+} from '@grunnverk/ai-service';
+import { createStorage } from '@grunnverk/shared';
+import * as GitHub from '@grunnverk/github-tools';
 
 // Helper function to read context files
 async function readContextFiles(contextFiles: string[] | undefined, logger: any): Promise<string> {

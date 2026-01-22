@@ -1,4 +1,4 @@
-# @eldrforge/commands-publish - Agentic Guide
+# @grunnverk/commands-publish - Agentic Guide
 
 ## Purpose
 
@@ -18,7 +18,7 @@ For AI agents working with this package:
 
 ```typescript
 // Publishing commands
-import { development, publish, release } from '@eldrforge/commands-publish';
+import { development, publish, release } from '@grunnverk/commands-publish';
 
 // Execute commands
 await development(config);
@@ -28,11 +28,11 @@ await release(config);
 
 ## Dependencies
 
-- @eldrforge/core - Core utilities
-- @eldrforge/commands-git - Git workflow commands
-- @eldrforge/git-tools - Git operations
-- @eldrforge/github-tools - GitHub API
-- @eldrforge/ai-service - AI content generation
+- @grunnverk/core - Core utilities
+- @grunnverk/commands-git - Git workflow commands
+- @grunnverk/git-tools - Git operations
+- @grunnverk/github-tools - GitHub API
+- @grunnverk/ai-service - AI content generation
 
 ## Command Workflows
 

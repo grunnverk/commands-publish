@@ -1,14 +1,14 @@
 /* eslint-disable @typescript-eslint/no-unused-vars */
 import path from 'path';
-import * as Commit from '@eldrforge/commands-git';
+import * as Commit from '@grunnverk/commands-git';
 import * as Release from './release';
 import fs from 'fs/promises';
 
-import { getLogger, getDryRunLogger, Config, PullRequest, Diff, getOutputPath, checkIfTagExists, confirmVersionInteractively, calculateBranchDependentVersion, DEFAULT_OUTPUT_DIRECTORY, KODRDRIV_DEFAULTS, runGitWithLock, filterContent } from '@eldrforge/core';
-import { run, runWithDryRunSupport, runSecure, validateGitRef, safeJsonParse, validatePackageJson, isBranchInSyncWithRemote, safeSyncBranchWithRemote, localBranchExists, remoteBranchExists } from '@eldrforge/git-tools';
-import * as GitHub from '@eldrforge/github-tools';
-import { createStorage, incrementPatchVersion, calculateTargetVersion } from '@eldrforge/shared';
-import { runAgenticPublish, formatAgenticPublishResult } from '@eldrforge/ai-service';
+import { getLogger, getDryRunLogger, Config, PullRequest, Diff, getOutputPath, checkIfTagExists, confirmVersionInteractively, calculateBranchDependentVersion, DEFAULT_OUTPUT_DIRECTORY, KODRDRIV_DEFAULTS, runGitWithLock, filterContent } from '@grunnverk/core';
+import { run, runWithDryRunSupport, runSecure, validateGitRef, safeJsonParse, validatePackageJson, isBranchInSyncWithRemote, safeSyncBranchWithRemote, localBranchExists, remoteBranchExists } from '@grunnverk/git-tools';
+import * as GitHub from '@grunnverk/github-tools';
+import { createStorage, incrementPatchVersion, calculateTargetVersion } from '@grunnverk/shared';
+import { runAgenticPublish, formatAgenticPublishResult } from '@grunnverk/ai-service';
 
 const scanNpmrcForEnvVars = async (storage: any): Promise<string[]> => {
     const logger = getLogger();
@@ -757,6 +757,7 @@ export const execute = async (runConfig: Config): Promise<void> => {
 
 
     let pr: PullRequest | null = null;
+    let newVersion: string = ''; // Will be set during version determination phase
 
     if (isDryRun) {
         logger.info('PR_CHECK: Would check for existing pull request | Mode: dry-run | Action: Skip PR lookup');
@@ -786,7 +787,7 @@ export const execute = async (runConfig: Config): Promise<void> => {
         const updateDepsScope = runConfig.publish?.updateDeps;
         if (updateDepsScope) {
             logger.info(`INTER_PROJECT_DEPS_UPDATE: Updating inter-project dependencies | Scope: ${updateDepsScope} | Type: inter-project | Command: kodrdriv updates`);
-            const Updates = await import('@eldrforge/commands-tree');
+            const Updates = await import('@grunnverk/commands-tree');
             const updatesConfig: Config = {
                 ...runConfig,
                 dryRun: isDryRun,
@@ -954,7 +955,6 @@ export const execute = async (runConfig: Config): Promise<void> => {
 
         // STEP 4: Determine and set target version AFTER checks, dependency commit, and target branch merge
         logger.info('Determining target version...');
-        let newVersion: string;
 
         if (isDryRun) {
             logger.info('Would determine target version and update package.json');
@@ -995,7 +995,7 @@ export const execute = async (runConfig: Config): Promise<void> => {
 
             // Smart tag conflict handling
             if (tagExists) {
-                const { getNpmPublishedVersion, getTagInfo } = await import('@eldrforge/core');
+                const { getNpmPublishedVersion, getTagInfo } = await import('@grunnverk/core');
 
                 logger.warn(`TAG_ALREADY_EXISTS: Tag already exists in repository | Tag: ${targetTagName} | Status: conflict | Action: Check npm registry`);
 
@@ -1042,7 +1042,7 @@ export const execute = async (runConfig: Config): Promise<void> => {
                         logger.info('PUBLISH_FORCE_REPUBLISH: Force republish mode enabled | Action: Deleting existing tag | Tag: ' + targetTagName + ' | Purpose: Allow republish');
 
                         if (!isDryRun) {
-                            const { runSecure } = await import('@eldrforge/git-tools');
+                            const { runSecure } = await import('@grunnverk/git-tools');
 
                             // Delete local tag
                             try {
@@ -1076,7 +1076,7 @@ export const execute = async (runConfig: Config): Promise<void> => {
                 const confirmedTagExists = await checkIfTagExists(confirmedTagName);
 
                 if (confirmedTagExists) {
-                    const { getNpmPublishedVersion } = await import('@eldrforge/core');
+                    const { getNpmPublishedVersion } = await import('@grunnverk/core');
                     const npmVersion = await getNpmPublishedVersion(packageJson.name);
 
                     if (npmVersion === newVersion) {
@@ -1351,6 +1351,51 @@ export const execute = async (runConfig: Config): Promise<void> => {
         }
     }
 
+    // Update package.json on target branch to release version and commit
+    // This ensures the tag points to a commit with the correct release version
+    if (!isDryRun) {
+        logger.info(`PUBLISH_VERSION_UPDATE_TARGET: Updating package.json on target branch to release version | Version: ${newVersion} | Branch: ${targetBranch}`);
+
+        // Read current package.json on target branch
+        const targetPackageJsonContents = await storage.readFile('package.json', 'utf-8');
+        const targetPackageJson = safeJsonParse(targetPackageJsonContents, 'package.json');
+
+        // Check if version update is needed
+        if (targetPackageJson.version !== newVersion) {
+            logger.info(`PUBLISH_VERSION_MISMATCH: Version mismatch detected on target | Current: ${targetPackageJson.version} | Expected: ${newVersion} | Action: Updating`);
+
+            // Update version in package.json
+            targetPackageJson.version = newVersion;
+            await storage.writeFile('package.json', JSON.stringify(targetPackageJson, null, 2) + '\n', 'utf-8');
+            logger.info(`PUBLISH_VERSION_UPDATED: Updated package.json version on target branch | Version: ${newVersion} | Branch: ${targetBranch}`);
+
+            // Stage and commit the version update
+            await runGitWithLock(process.cwd(), async () => {
+                await runSecure('git', ['add', 'package.json']);
+            }, 'stage version update on target');
+
+            // Check if there are staged changes before committing
+            if (await Diff.hasStagedChanges()) {
+                logger.info('PUBLISH_VERSION_COMMITTING: Committing version update to target branch | Purpose: Ensure tag points to correct version');
+                await runGitWithLock(process.cwd(), async () => {
+                    await Commit.commit(runConfig);
+                }, 'commit version update on target');
+                logger.info('PUBLISH_VERSION_COMMITTED: Version update committed successfully');
+
+                // Push the version update to remote
+                logger.info(`PUBLISH_VERSION_PUSHING: Pushing version update to remote | Branch: ${targetBranch} | Remote: origin`);
+                await runGitWithLock(process.cwd(), async () => {
+                    await runSecure('git', ['push', 'origin', targetBranch]);
+                }, `push version update to ${targetBranch}`);
+                logger.info('PUBLISH_VERSION_PUSHED: Version update pushed to remote successfully');
+            } else {
+                logger.verbose('PUBLISH_VERSION_NO_CHANGES: No changes to commit (version already correct)');
+            }
+        } else {
+            logger.info(`PUBLISH_VERSION_CORRECT: Version already correct on target branch | Version: ${newVersion} | Branch: ${targetBranch}`);
+        }
+    }
+
     // Now create and push the tag on the target branch
     logger.info('Creating release tag...');
     let tagName: string;
@@ -1358,9 +1403,9 @@ export const execute = async (runConfig: Config): Promise<void> => {
         logger.info('Would read package.json version and create git tag');
         tagName = 'v1.0.0'; // Mock version for dry run
     } else {
-        const packageJsonContents = await storage.readFile('package.json', 'utf-8');
-        const { version } = safeJsonParse(packageJsonContents, 'package.json');
-        tagName = `v${version}`;
+        // Use the newVersion we just set instead of reading from package.json
+        // This ensures consistency even if the file read fails
+        tagName = `v${newVersion}`;
 
         // Check if tag already exists locally
         try {
@@ -1607,7 +1652,7 @@ export const execute = async (runConfig: Config): Promise<void> => {
             const currentVer = validatedPkgJson.version;
 
             // Import incrementPrereleaseVersion from core
-            const { incrementPrereleaseVersion } = await import('@eldrforge/core');
+            const { incrementPrereleaseVersion } = await import('@grunnverk/core');
             const newVersion = incrementPrereleaseVersion(currentVer, versionTag);
 
             // Update package.json with new version

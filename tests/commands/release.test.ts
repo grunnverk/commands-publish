@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import type { Config } from '@eldrforge/core';
+import type { Config } from '@grunnverk/core';
 
 // Mock ALL dependencies BEFORE importing
 vi.mock('@riotprompt/riotprompt', () => ({
@@ -9,13 +9,13 @@ vi.mock('@riotprompt/riotprompt', () => ({
 
 vi.mock('dotenv/config', () => ({}));
 
-vi.mock('@eldrforge/git-tools', () => ({
+vi.mock('@grunnverk/git-tools', () => ({
     getDefaultFromRef: vi.fn(() => 'v1.0.0'),
     getCurrentBranch: vi.fn(() => 'main'),
     safeJsonParse: vi.fn((s) => JSON.parse(s)),
 }));
 
-vi.mock('@eldrforge/core', () => ({
+vi.mock('@grunnverk/core', () => ({
     Config: {},
     Log: { create: vi.fn(() => ({ get: vi.fn(() => 'log content') })) },
     Diff: { create: vi.fn(() => ({ get: vi.fn(() => 'diff content') })) },
@@ -39,7 +39,7 @@ vi.mock('@eldrforge/core', () => ({
     filterContent: vi.fn((content) => ({ filtered: content, removed: [] })),
 }));
 
-vi.mock('@eldrforge/ai-service', () => ({
+vi.mock('@grunnverk/ai-service', () => ({
     createCompletionWithRetry: vi.fn(() => ({ content: '{}' })),
     getUserChoice: vi.fn(() => 'c'),
     editContentInEditor: vi.fn((content) => ({ content })),
@@ -58,7 +58,7 @@ vi.mock('@eldrforge/ai-service', () => ({
     createReleasePrompt: vi.fn(() => ({ prompt: {}, messages: [] })),
 }));
 
-vi.mock('@eldrforge/shared', () => ({
+vi.mock('@grunnverk/shared', () => ({
     createStorage: vi.fn(() => ({
         readFile: vi.fn(() => '{"version": "1.0.0"}'),
         writeFile: vi.fn(),
@@ -66,7 +66,7 @@ vi.mock('@eldrforge/shared', () => ({
     })),
 }));
 
-vi.mock('@eldrforge/github-tools', () => ({
+vi.mock('@grunnverk/github-tools', () => ({
     getMilestoneIssuesForRelease: vi.fn(() => ''),
 }));
 

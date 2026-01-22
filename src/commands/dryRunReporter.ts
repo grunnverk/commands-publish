@@ -4,7 +4,7 @@
  * Provides comprehensive preview of what would happen during publish
  */
 
-import { getLogger } from '@eldrforge/core';
+import { getLogger } from '@grunnverk/core';
 
 export interface DryRunReport {
     operations: Array<{

@@ -5,11 +5,11 @@
  * allowing users to fix multiple problems at once rather than one at a time.
  */
 
-import { run } from '@eldrforge/git-tools';
-import { getLogger, ValidationError } from '@eldrforge/core';
-import { createStorage } from '@eldrforge/shared';
+import { run } from '@grunnverk/git-tools';
+import { getLogger, ValidationError } from '@grunnverk/core';
+import { createStorage } from '@grunnverk/shared';
 import path from 'path';
-import type { Config } from '@eldrforge/core';
+import type { Config } from '@grunnverk/core';
 
 export interface ValidationIssue {
     check: string;

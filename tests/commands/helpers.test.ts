@@ -2,9 +2,9 @@ import { describe, it, expect, vi } from 'vitest';
 
 const mockLogger = { info: vi.fn(), debug: vi.fn(), warn: vi.fn(), error: vi.fn() };
 
-vi.mock('@eldrforge/core', () => ({ getLogger: () => mockLogger }));
-vi.mock('@eldrforge/git-tools', () => ({ run: vi.fn().mockResolvedValue({ stdout: '' }), safeJsonParse: (s: string) => JSON.parse(s) }));
-vi.mock('@eldrforge/shared', () => ({ createStorage: () => ({ readFile: vi.fn().mockResolvedValue('{}'), writeFile: vi.fn() }) }));
+vi.mock('@grunnverk/core', () => ({ getLogger: () => mockLogger }));
+vi.mock('@grunnverk/git-tools', () => ({ run: vi.fn().mockResolvedValue({ stdout: '' }), safeJsonParse: (s: string) => JSON.parse(s) }));
+vi.mock('@grunnverk/shared', () => ({ createStorage: () => ({ readFile: vi.fn().mockResolvedValue('{}'), writeFile: vi.fn() }) }));
 
 describe('publish helpers', () => {
     it('parses version strings', () => {

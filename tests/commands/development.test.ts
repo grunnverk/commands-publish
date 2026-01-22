@@ -1,8 +1,8 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import type { Config } from '@eldrforge/core';
+import type { Config } from '@grunnverk/core';
 
 // Mock dependencies
-vi.mock('@eldrforge/core', () => ({
+vi.mock('@grunnverk/core', () => ({
     getLogger: vi.fn(() => ({
         info: vi.fn(), debug: vi.fn(), warn: vi.fn(), error: vi.fn(), verbose: vi.fn()
     })),
@@ -26,7 +26,7 @@ vi.mock('@eldrforge/core', () => ({
     findDevelopmentBranch: vi.fn(() => 'working'),
 }));
 
-vi.mock('@eldrforge/git-tools', () => ({
+vi.mock('@grunnverk/git-tools', () => ({
     run: vi.fn(() => ({ stdout: '' })),
     runSecure: vi.fn(() => ({ stdout: '' })),
     runWithDryRunSupport: vi.fn(() => ({ stdout: '' })),
@@ -37,7 +37,7 @@ vi.mock('@eldrforge/git-tools', () => ({
     validatePackageJson: vi.fn((p) => p),
 }));
 
-vi.mock('@eldrforge/shared', () => ({
+vi.mock('@grunnverk/shared', () => ({
     createStorage: vi.fn(() => ({
         readFile: vi.fn(() => '{"name": "@test/pkg", "version": "1.0.0"}'),
         writeFile: vi.fn(),
@@ -104,8 +104,8 @@ describe('development command', () => {
     it.skip('uses target branch version for increment after publish', async () => {
         // This test verifies the critical fix: after publishing v0.0.15,
         // the development command should bump to 0.0.16-dev.0, not 0.0.15-dev.0
-        const { run } = await import('@eldrforge/git-tools');
-        const { createStorage } = await import('@eldrforge/shared');
+        const { run } = await import('@grunnverk/git-tools');
+        const { createStorage } = await import('@grunnverk/shared');
 
         // Mock git show to return version from main branch (simulating post-publish state)
         vi.mocked(run).mockImplementation(async (cmd: string) => {

@@ -6,3 +6,6 @@ export { execute as release } from './commands/release';
 export * from './commands/validation';
 export * from './commands/dryRunReporter';
 
+// Utilities
+export * from './utils/checkpoints';
+

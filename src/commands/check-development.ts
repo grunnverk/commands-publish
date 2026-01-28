@@ -64,6 +64,7 @@ export async function execute(config: Config): Promise<string> {
         devVersion: { passed: true, issues: [] as string[] },
         linkStatus: { passed: true, issues: [] as string[], warnings: [] as string[] },
         openPRs: { passed: true, issues: [] as string[], warnings: [] as string[] },
+        releaseWorkflow: { passed: true, issues: [] as string[], warnings: [] as string[] },
     };
 
     const packagesToCheck = isTree ? packageJsonFiles : [path.join(directory, 'package.json')];
@@ -273,9 +274,74 @@ export async function execute(config: Config): Promise<string> {
                 );
             }
         }
+        
+        // 7. Check release workflow readiness (validate build, test, publish dry-run)
+        // This check validates that the package can be successfully published
+        // Only run if explicitly requested via config flag
+        if ((config as any).validateReleaseWorkflow) {
+            try {
+                logger.info(`${pkgName}: Validating release workflow readiness...`);
+                
+                // Check 1: Build succeeds
+                try {
+                    await run('npm run build', { cwd: pkgDir });
+                    logger.debug(`${pkgName}: Build check passed`);
+                } catch (buildError: any) {
+                    checks.releaseWorkflow.passed = false;
+                    checks.releaseWorkflow.issues.push(
+                        `${pkgName}: Build fails - ${buildError.message || buildError}`
+                    );
+                }
+                
+                // Check 2: Tests pass
+                try {
+                    await run('npm test', { cwd: pkgDir });
+                    logger.debug(`${pkgName}: Test check passed`);
+                } catch (testError: any) {
+                    checks.releaseWorkflow.passed = false;
+                    checks.releaseWorkflow.issues.push(
+                        `${pkgName}: Tests fail - ${testError.message || testError}`
+                    );
+                }
+                
+                // Check 3: Publish dry-run succeeds
+                try {
+                    await run('npm publish --dry-run', { cwd: pkgDir });
+                    logger.debug(`${pkgName}: Publish dry-run check passed`);
+                } catch (publishError: any) {
+                    checks.releaseWorkflow.passed = false;
+                    checks.releaseWorkflow.issues.push(
+                        `${pkgName}: Publish dry-run fails - ${publishError.message || publishError}`
+                    );
+                }
+                
+                // Check 4: NPM_TOKEN environment variable
+                if (!process.env.NPM_TOKEN) {
+                    checks.releaseWorkflow.warnings.push(
+                        `${pkgName}: NPM_TOKEN environment variable not set (required for publishing)`
+                    );
+                }
+                
+                // Check 5: GitHub workflow file exists
+                const workflowPath = path.join(pkgDir, '.github', 'workflows', 'npm-publish.yml');
+                try {
+                    await readFile(workflowPath, 'utf-8');
+                    logger.debug(`${pkgName}: GitHub workflow file exists`);
+                } catch {
+                    checks.releaseWorkflow.warnings.push(
+                        `${pkgName}: GitHub workflow file not found at .github/workflows/npm-publish.yml`
+                    );
+                }
+                
+            } catch (error: any) {
+                checks.releaseWorkflow.warnings.push(
+                    `${pkgName}: Could not validate release workflow - ${error.message || error}`
+                );
+            }
+        }
     }
 
-    // Build summary - linkStatus is not included in allPassed (it's a recommendation, not a requirement)
+    // Build summary - linkStatus and releaseWorkflow are not included in allPassed (recommendations)
     const allPassed = checks.branch.passed &&
                      checks.remoteSync.passed &&
                      checks.mergeConflicts.passed &&
@@ -284,7 +350,8 @@ export async function execute(config: Config): Promise<string> {
 
     const hasWarnings = checks.linkStatus.warnings.length > 0 || 
                        checks.mergeConflicts.warnings.length > 0 ||
-                       checks.openPRs.warnings.length > 0;
+                       checks.openPRs.warnings.length > 0 ||
+                       checks.releaseWorkflow.warnings.length > 0;
 
     // Log results
     let summary = `\n${'='.repeat(60)}\n`;
@@ -336,6 +403,12 @@ export async function execute(config: Config): Promise<string> {
             checks.openPRs.issues.forEach(issue => summary += `   - ${issue}\n`);
             summary += `\n`;
         }
+        
+        if (!checks.releaseWorkflow.passed) {
+            summary += `❌ Release Workflow Issues:\n`;
+            checks.releaseWorkflow.issues.forEach(issue => summary += `   - ${issue}\n`);
+            summary += `\n`;
+        }
     }
 
     // Log warnings separately (non-blocking)
@@ -344,6 +417,7 @@ export async function execute(config: Config): Promise<string> {
         checks.linkStatus.warnings.forEach(warning => summary += `   - ${warning}\n`);
         checks.mergeConflicts.warnings.forEach(warning => summary += `   - ${warning}\n`);
         checks.openPRs.warnings.forEach(warning => summary += `   - ${warning}\n`);
+        checks.releaseWorkflow.warnings.forEach(warning => summary += `   - ${warning}\n`);
         summary += `\n`;
     }
 

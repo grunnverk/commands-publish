@@ -395,10 +395,20 @@ export const execute = async (runConfig: Config): Promise<string> => {
                 const packageJson = JSON.parse(await fs.readFile('package.json', 'utf-8'));
                 const currentVersion = packageJson.version;
 
-                // If current version already has the dev tag, we're done
+                // If current version already has the dev tag, check if base version is published
                 if (currentVersion.includes(`-${prereleaseTag}.`)) {
-                    logger.info(`DEV_ALREADY_DEV_VERSION: Already on working branch with development version | Branch: ${workingBranch} | Version: ${currentVersion} | Status: no-bump-needed`);
-                    return 'Already on working branch with development version';
+                    // Check if base version is already published on npm
+                    const baseVersion = currentVersion.split('-')[0];
+                    const { getNpmPublishedVersion } = await import('@grunnverk/core');
+                    const publishedVersion = await getNpmPublishedVersion(packageJson.name);
+
+                    if (publishedVersion !== baseVersion) {
+                        logger.info(`DEV_ALREADY_DEV_VERSION: Already on working branch with development version | Branch: ${workingBranch} | Version: ${currentVersion} | Status: no-bump-needed`);
+                        return 'Already on working branch with development version';
+                    }
+
+                    logger.warn(`DEV_VERSION_CONFLICT: Base version already published | Current: ${currentVersion} | Published: ${publishedVersion} | Action: Will bump to next dev version`);
+                    // Continue with version bump logic
                 }
             } catch {
                 logger.debug('Could not check current version, proceeding with version bump');

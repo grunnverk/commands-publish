@@ -1015,9 +1015,11 @@ export const execute = async (runConfig: Config): Promise<void> => {
 
                     if (runConfig.publish?.skipAlreadyPublished) {
                         logger.info('PUBLISH_SKIPPED_FLAG: Skipping package due to flag | Flag: --skip-already-published | Version: ' + proposedVersion + ' | Status: skipped');
-                        // Emit skip marker for tree mode detection
+                        // Emit skip marker for tree mode detection with reason
                         // eslint-disable-next-line no-console
                         console.log('KODRDRIV_PUBLISH_SKIPPED');
+                        // eslint-disable-next-line no-console
+                        console.log('KODRDRIV_PUBLISH_SKIP_REASON:already-published');
                         return; // Exit without error
                     } else {
                         throw new Error(`Version ${proposedVersion} already published. Use --skip-already-published to continue.`);

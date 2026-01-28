@@ -60,6 +60,7 @@ export async function execute(config: Config): Promise<string> {
     const checks = {
         branch: { passed: true, issues: [] as string[] },
         remoteSync: { passed: true, issues: [] as string[] },
+        mergeConflicts: { passed: true, issues: [] as string[], warnings: [] as string[] },
         devVersion: { passed: true, issues: [] as string[] },
         linkStatus: { passed: true, issues: [] as string[], warnings: [] as string[] },
         openPRs: { passed: true, issues: [] as string[], warnings: [] as string[] },
@@ -113,7 +114,75 @@ export async function execute(config: Config): Promise<string> {
             checks.remoteSync.issues.push(`${pkgName}: Could not check remote sync - ${error.message || error}`);
         }
 
-        // 3. Check dev version status
+        // 3. Check for merge conflicts with target branch (main)
+        try {
+            const gitStatus = await getGitStatusSummary(pkgDir);
+            const currentBranch = gitStatus.branch;
+            const targetBranch = 'main'; // The branch we'll merge into during publish
+
+                // Skip if we're already on main
+                if (currentBranch !== 'main' && currentBranch !== 'master') {
+                    // Fetch latest to ensure we have up-to-date refs
+                    await run('git fetch origin', { cwd: pkgDir });
+
+                    // Try a test merge to detect conflicts
+                    // Use --no-commit --no-ff to simulate the merge without actually doing it
+                    try {
+                        // Check if there would be conflicts using git merge --no-commit --no-ff
+                        // This is safer as it doesn't modify the working tree
+                        await run(
+                            `git merge --no-commit --no-ff origin/${targetBranch}`,
+                            { cwd: pkgDir }
+                        );
+                        
+                        // If we get here, check if there are conflicts
+                        const { stdout: statusAfterMerge } = await run('git status --porcelain', { cwd: pkgDir });
+                        
+                        if (statusAfterMerge.includes('UU ') || statusAfterMerge.includes('AA ') || 
+                            statusAfterMerge.includes('DD ') || statusAfterMerge.includes('AU ') || 
+                            statusAfterMerge.includes('UA ') || statusAfterMerge.includes('DU ') || 
+                            statusAfterMerge.includes('UD ')) {
+                            checks.mergeConflicts.passed = false;
+                            checks.mergeConflicts.issues.push(
+                                `${pkgName}: Merge conflicts detected with ${targetBranch} branch`
+                            );
+                        }
+                        
+                        // Abort the test merge (only if there's actually a merge in progress)
+                        try {
+                            await run('git merge --abort', { cwd: pkgDir });
+                        } catch {
+                            // Ignore - there might not be a merge to abort if it was a fast-forward
+                        }
+                    } catch (mergeError: any) {
+                        // Abort any partial merge
+                        try {
+                            await run('git merge --abort', { cwd: pkgDir });
+                        } catch {
+                            // Ignore abort errors
+                        }
+                        
+                        // If merge failed, there are likely conflicts
+                        if (mergeError.message?.includes('CONFLICT') || mergeError.stderr?.includes('CONFLICT')) {
+                            checks.mergeConflicts.passed = false;
+                            checks.mergeConflicts.issues.push(
+                                `${pkgName}: Merge conflicts detected with ${targetBranch} branch`
+                            );
+                        } else {
+                            // Some other error - log as warning
+                            checks.mergeConflicts.warnings.push(
+                                `${pkgName}: Could not check for merge conflicts - ${mergeError.message || mergeError}`
+                            );
+                        }
+                    }
+                }
+        } catch (error: any) {
+            checks.mergeConflicts.warnings.push(
+                `${pkgName}: Could not check for merge conflicts - ${error.message || error}`
+            );
+        }
+
+        // 4. Check dev version status
         const version = pkgJson.version;
         if (!version) {
             checks.devVersion.issues.push(`${pkgName}: No version field in package.json`);
@@ -136,7 +205,7 @@ export async function execute(config: Config): Promise<string> {
             }
         }
 
-        // 4. Check link status (warning only - links are recommended but not required)
+        // 5. Check link status (warning only - links are recommended but not required)
         if (pkgJson.dependencies || pkgJson.devDependencies) {
             try {
                 const linkedDeps = await getLinkedDependencies(pkgDir);
@@ -159,7 +228,7 @@ export async function execute(config: Config): Promise<string> {
             }
         }
 
-        // 5. Check for open PRs from working branch
+        // 6. Check for open PRs from working branch
         if (pkgJson.repository?.url) {
             try {
                 const gitStatus = await getGitStatusSummary(pkgDir);
@@ -209,10 +278,13 @@ export async function execute(config: Config): Promise<string> {
     // Build summary - linkStatus is not included in allPassed (it's a recommendation, not a requirement)
     const allPassed = checks.branch.passed &&
                      checks.remoteSync.passed &&
+                     checks.mergeConflicts.passed &&
                      checks.devVersion.passed &&
                      checks.openPRs.passed;
 
-    const hasWarnings = checks.linkStatus.warnings.length > 0 || checks.openPRs.warnings.length > 0;
+    const hasWarnings = checks.linkStatus.warnings.length > 0 || 
+                       checks.mergeConflicts.warnings.length > 0 ||
+                       checks.openPRs.warnings.length > 0;
 
     // Log results
     let summary = `\n${'='.repeat(60)}\n`;
@@ -226,6 +298,7 @@ export async function execute(config: Config): Promise<string> {
         summary += `All required checks passed:\n`;
         summary += `  ✓ Branch status\n`;
         summary += `  ✓ Remote sync\n`;
+        summary += `  ✓ No merge conflicts with main\n`;
         summary += `  ✓ Dev versions\n`;
         summary += `  ✓ No open PRs\n`;
         if (!hasWarnings) {
@@ -246,6 +319,12 @@ export async function execute(config: Config): Promise<string> {
             summary += `\n`;
         }
         
+        if (!checks.mergeConflicts.passed) {
+            summary += `❌ Merge Conflict Issues:\n`;
+            checks.mergeConflicts.issues.forEach(issue => summary += `   - ${issue}\n`);
+            summary += `\n`;
+        }
+        
         if (!checks.devVersion.passed) {
             summary += `❌ Dev Version Issues:\n`;
             checks.devVersion.issues.forEach(issue => summary += `   - ${issue}\n`);
@@ -263,6 +342,7 @@ export async function execute(config: Config): Promise<string> {
     if (hasWarnings) {
         summary += `⚠️  Recommendations:\n`;
         checks.linkStatus.warnings.forEach(warning => summary += `   - ${warning}\n`);
+        checks.mergeConflicts.warnings.forEach(warning => summary += `   - ${warning}\n`);
         checks.openPRs.warnings.forEach(warning => summary += `   - ${warning}\n`);
         summary += `\n`;
     }

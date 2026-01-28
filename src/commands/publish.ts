@@ -1653,7 +1653,11 @@ export const execute = async (runConfig: Config): Promise<void> => {
 
             // Import incrementPrereleaseVersion from core
             const { incrementPrereleaseVersion } = await import('@grunnverk/core');
-            const newVersion = incrementPrereleaseVersion(currentVer, versionTag);
+            // After publishing a release version, we need to increment the patch first,
+            // then add the prerelease tag. This ensures we don't go back to the same dev version.
+            // Example: 1.0.1-dev.0 -> publish 1.0.1 -> increment to 1.0.2-dev.0 (not 1.0.1-dev.0)
+            const incrementedPatchVersion = incrementPatchVersion(currentVer);
+            const newVersion = incrementPrereleaseVersion(incrementedPatchVersion, versionTag);
 
             // Update package.json with new version
             validatedPkgJson.version = newVersion;

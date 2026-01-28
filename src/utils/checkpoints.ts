@@ -1,6 +1,6 @@
 /**
  * Checkpoint System for Publish Recovery
- * 
+ *
  * Saves state at critical points during publish to enable recovery from failures.
  * Checkpoints are saved locally and help determine the appropriate recovery strategy.
  */
@@ -14,7 +14,7 @@ const logger = getLogger();
 /**
  * Phases of the publish workflow
  */
-export type PublishPhase = 
+export type PublishPhase =
     | 'initialized'        // Publish command started
     | 'validated'          // Pre-publish validation passed
     | 'pr-created'         // Pull request created
@@ -31,43 +31,43 @@ export type PublishPhase =
 export interface PublishCheckpoint {
     /** Current phase of the publish workflow */
     phase: PublishPhase;
-    
+
     /** Timestamp when checkpoint was created */
     timestamp: string;
-    
+
     /** Package name */
     packageName: string;
-    
+
     /** Target version being published */
     version: string;
-    
+
     /** Current git branch */
     branch: string;
-    
+
     /** Working directory */
     workingDirectory: string;
-    
+
     /** Pull request number (if created) */
     prNumber?: number;
-    
+
     /** Pull request URL (if created) */
     prUrl?: string;
-    
+
     /** Git tags created during this publish */
     tags: string[];
-    
+
     /** Whether npm publish completed successfully */
     npmPublished: boolean;
-    
+
     /** GitHub workflow run ID (if available) */
     workflowRunId?: string;
-    
+
     /** GitHub workflow run URL (if available) */
     workflowRunUrl?: string;
-    
+
     /** Error message if failed */
     error?: string;
-    
+
     /** Additional metadata */
     metadata?: {
         targetBranch?: string;
@@ -90,14 +90,14 @@ function getCheckpointPath(workingDirectory: string): string {
 export async function saveCheckpoint(checkpoint: PublishCheckpoint): Promise<void> {
     const storage = createStorage();
     const checkpointPath = getCheckpointPath(checkpoint.workingDirectory);
-    
+
     try {
         await storage.writeFile(
             checkpointPath,
             JSON.stringify(checkpoint, null, 2),
             'utf-8'
         );
-        
+
         logger.debug(`CHECKPOINT_SAVED: Saved publish checkpoint | Phase: ${checkpoint.phase} | Package: ${checkpoint.packageName} | Version: ${checkpoint.version}`);
     } catch (error: any) {
         logger.warn(`CHECKPOINT_SAVE_FAILED: Failed to save checkpoint | Error: ${error.message}`);
@@ -110,17 +110,17 @@ export async function saveCheckpoint(checkpoint: PublishCheckpoint): Promise<voi
 export async function loadCheckpoint(workingDirectory: string): Promise<PublishCheckpoint | null> {
     const storage = createStorage();
     const checkpointPath = getCheckpointPath(workingDirectory);
-    
+
     try {
         if (!await storage.exists(checkpointPath)) {
             return null;
         }
-        
+
         const content = await storage.readFile(checkpointPath, 'utf-8');
         const checkpoint = JSON.parse(content) as PublishCheckpoint;
-        
+
         logger.debug(`CHECKPOINT_LOADED: Loaded publish checkpoint | Phase: ${checkpoint.phase} | Package: ${checkpoint.packageName} | Version: ${checkpoint.version}`);
-        
+
         return checkpoint;
     } catch (error: any) {
         logger.warn(`CHECKPOINT_LOAD_FAILED: Failed to load checkpoint | Error: ${error.message}`);
@@ -134,7 +134,7 @@ export async function loadCheckpoint(workingDirectory: string): Promise<PublishC
 export async function deleteCheckpoint(workingDirectory: string): Promise<void> {
     const storage = createStorage();
     const checkpointPath = getCheckpointPath(workingDirectory);
-    
+
     try {
         if (await storage.exists(checkpointPath)) {
             await storage.deleteFile(checkpointPath);
@@ -153,18 +153,18 @@ export async function updateCheckpoint(
     updates: Partial<PublishCheckpoint>
 ): Promise<void> {
     const existing = await loadCheckpoint(workingDirectory);
-    
+
     if (!existing) {
         logger.warn('CHECKPOINT_UPDATE_FAILED: No existing checkpoint to update');
         return;
     }
-    
+
     const updated: PublishCheckpoint = {
         ...existing,
         ...updates,
         timestamp: new Date().toISOString(),
     };
-    
+
     await saveCheckpoint(updated);
 }
 
@@ -174,16 +174,16 @@ export async function updateCheckpoint(
 export interface RecoveryStrategy {
     /** Can this publish be recovered? */
     recoverable: boolean;
-    
+
     /** Recommended recovery action */
     action: 'rollback' | 'fix-forward' | 'reset' | 'continue' | 'none';
-    
+
     /** Human-readable explanation */
     explanation: string;
-    
+
     /** Detailed recovery steps */
     steps: string[];
-    
+
     /** Risks of the recovery action */
     risks: string[];
 }
@@ -193,7 +193,7 @@ export interface RecoveryStrategy {
  */
 export function analyzeRecoveryStrategy(checkpoint: PublishCheckpoint): RecoveryStrategy {
     const phase = checkpoint.phase;
-    
+
     // Phase: initialized, validated, pr-created
     // These are safe - nothing permanent has happened yet
     if (phase === 'initialized' || phase === 'validated' || phase === 'pr-created') {
@@ -209,7 +209,7 @@ export function analyzeRecoveryStrategy(checkpoint: PublishCheckpoint): Recovery
             risks: ['None - no permanent changes have been made']
         };
     }
-    
+
     // Phase: pr-merged (but not published)
     // This is the danger zone - merge is permanent but npm publish hasn't happened
     if (phase === 'pr-merged' && !checkpoint.npmPublished) {
@@ -231,7 +231,7 @@ export function analyzeRecoveryStrategy(checkpoint: PublishCheckpoint): Recovery
             ]
         };
     }
-    
+
     // Phase: tagged, npm-publishing (but not completed)
     // Tags exist but npm publish incomplete
     if ((phase === 'tagged' || phase === 'npm-publishing') && !checkpoint.npmPublished) {
@@ -252,7 +252,7 @@ export function analyzeRecoveryStrategy(checkpoint: PublishCheckpoint): Recovery
             ]
         };
     }
-    
+
     // Phase: npm-published or completed
     // Package is published - can't rollback npm
     if (checkpoint.npmPublished || phase === 'npm-published' || phase === 'completed') {
@@ -272,7 +272,7 @@ export function analyzeRecoveryStrategy(checkpoint: PublishCheckpoint): Recovery
             ]
         };
     }
-    
+
     // Phase: failed (generic failure)
     if (phase === 'failed') {
         // Determine based on what was completed
@@ -284,7 +284,7 @@ export function analyzeRecoveryStrategy(checkpoint: PublishCheckpoint): Recovery
             return analyzeRecoveryStrategy({ ...checkpoint, phase: 'initialized' });
         }
     }
-    
+
     // Unknown phase or state
     return {
         recoverable: false,
@@ -305,7 +305,7 @@ export function analyzeRecoveryStrategy(checkpoint: PublishCheckpoint): Recovery
  */
 export function getCheckpointSummary(checkpoint: PublishCheckpoint): string {
     const lines: string[] = [];
-    
+
     lines.push('='.repeat(60));
     lines.push('Publish Checkpoint Summary');
     lines.push('='.repeat(60));
@@ -316,37 +316,37 @@ export function getCheckpointSummary(checkpoint: PublishCheckpoint): string {
     lines.push(`Branch: ${checkpoint.branch}`);
     lines.push(`Timestamp: ${checkpoint.timestamp}`);
     lines.push('');
-    
+
     if (checkpoint.prNumber) {
         lines.push(`Pull Request: #${checkpoint.prNumber}`);
         if (checkpoint.prUrl) {
             lines.push(`PR URL: ${checkpoint.prUrl}`);
         }
     }
-    
+
     if (checkpoint.tags.length > 0) {
         lines.push(`Tags Created: ${checkpoint.tags.join(', ')}`);
     }
-    
+
     if (checkpoint.npmPublished) {
         lines.push('✅ npm Published: Yes');
     } else {
         lines.push('❌ npm Published: No');
     }
-    
+
     if (checkpoint.workflowRunUrl) {
         lines.push(`Workflow: ${checkpoint.workflowRunUrl}`);
     }
-    
+
     if (checkpoint.error) {
         lines.push('');
         lines.push('Error:');
         lines.push(`  ${checkpoint.error}`);
     }
-    
+
     lines.push('');
     lines.push('='.repeat(60));
-    
+
     return lines.join('\n');
 }
 
@@ -354,7 +354,7 @@ export function getCheckpointSummary(checkpoint: PublishCheckpoint): string {
  * Check if a checkpoint indicates a failed publish
  */
 export function isFailedPublish(checkpoint: PublishCheckpoint): boolean {
-    return checkpoint.phase === 'failed' || 
+    return checkpoint.phase === 'failed' ||
            (checkpoint.phase === 'pr-merged' && !checkpoint.npmPublished) ||
            (checkpoint.phase === 'tagged' && !checkpoint.npmPublished) ||
            (checkpoint.phase === 'npm-publishing' && !checkpoint.npmPublished);

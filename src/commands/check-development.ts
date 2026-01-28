@@ -33,8 +33,8 @@ const DEFAULT_EXCLUDE_SUBPROJECTS = [
 export async function execute(config: Config): Promise<string> {
     const logger = getLogger();
     // Get directory from config - check multiple possible locations
-    const directory = (config as any).directory || 
-                     config.tree?.directories?.[0] || 
+    const directory = (config as any).directory ||
+                     config.tree?.directories?.[0] ||
                      process.cwd();
 
     logger.info(`Checking development readiness in ${directory}`);
@@ -121,62 +121,62 @@ export async function execute(config: Config): Promise<string> {
             const currentBranch = gitStatus.branch;
             const targetBranch = 'main'; // The branch we'll merge into during publish
 
-                // Skip if we're already on main
-                if (currentBranch !== 'main' && currentBranch !== 'master') {
-                    // Fetch latest to ensure we have up-to-date refs
-                    await run('git fetch origin', { cwd: pkgDir });
+            // Skip if we're already on main
+            if (currentBranch !== 'main' && currentBranch !== 'master') {
+                // Fetch latest to ensure we have up-to-date refs
+                await run('git fetch origin', { cwd: pkgDir });
 
-                    // Try a test merge to detect conflicts
-                    // Use --no-commit --no-ff to simulate the merge without actually doing it
-                    try {
-                        // Check if there would be conflicts using git merge --no-commit --no-ff
-                        // This is safer as it doesn't modify the working tree
-                        await run(
-                            `git merge --no-commit --no-ff origin/${targetBranch}`,
-                            { cwd: pkgDir }
-                        );
-                        
-                        // If we get here, check if there are conflicts
-                        const { stdout: statusAfterMerge } = await run('git status --porcelain', { cwd: pkgDir });
-                        
-                        if (statusAfterMerge.includes('UU ') || statusAfterMerge.includes('AA ') || 
-                            statusAfterMerge.includes('DD ') || statusAfterMerge.includes('AU ') || 
-                            statusAfterMerge.includes('UA ') || statusAfterMerge.includes('DU ') || 
+                // Try a test merge to detect conflicts
+                // Use --no-commit --no-ff to simulate the merge without actually doing it
+                try {
+                    // Check if there would be conflicts using git merge --no-commit --no-ff
+                    // This is safer as it doesn't modify the working tree
+                    await run(
+                        `git merge --no-commit --no-ff origin/${targetBranch}`,
+                        { cwd: pkgDir }
+                    );
+
+                    // If we get here, check if there are conflicts
+                    const { stdout: statusAfterMerge } = await run('git status --porcelain', { cwd: pkgDir });
+
+                    if (statusAfterMerge.includes('UU ') || statusAfterMerge.includes('AA ') ||
+                            statusAfterMerge.includes('DD ') || statusAfterMerge.includes('AU ') ||
+                            statusAfterMerge.includes('UA ') || statusAfterMerge.includes('DU ') ||
                             statusAfterMerge.includes('UD ')) {
-                            checks.mergeConflicts.passed = false;
-                            checks.mergeConflicts.issues.push(
-                                `${pkgName}: Merge conflicts detected with ${targetBranch} branch`
-                            );
-                        }
-                        
-                        // Abort the test merge (only if there's actually a merge in progress)
-                        try {
-                            await run('git merge --abort', { cwd: pkgDir });
-                        } catch {
-                            // Ignore - there might not be a merge to abort if it was a fast-forward
-                        }
-                    } catch (mergeError: any) {
-                        // Abort any partial merge
-                        try {
-                            await run('git merge --abort', { cwd: pkgDir });
-                        } catch {
-                            // Ignore abort errors
-                        }
-                        
-                        // If merge failed, there are likely conflicts
-                        if (mergeError.message?.includes('CONFLICT') || mergeError.stderr?.includes('CONFLICT')) {
-                            checks.mergeConflicts.passed = false;
-                            checks.mergeConflicts.issues.push(
-                                `${pkgName}: Merge conflicts detected with ${targetBranch} branch`
-                            );
-                        } else {
-                            // Some other error - log as warning
-                            checks.mergeConflicts.warnings.push(
-                                `${pkgName}: Could not check for merge conflicts - ${mergeError.message || mergeError}`
-                            );
-                        }
+                        checks.mergeConflicts.passed = false;
+                        checks.mergeConflicts.issues.push(
+                            `${pkgName}: Merge conflicts detected with ${targetBranch} branch`
+                        );
+                    }
+
+                    // Abort the test merge (only if there's actually a merge in progress)
+                    try {
+                        await run('git merge --abort', { cwd: pkgDir });
+                    } catch {
+                        // Ignore - there might not be a merge to abort if it was a fast-forward
+                    }
+                } catch (mergeError: any) {
+                    // Abort any partial merge
+                    try {
+                        await run('git merge --abort', { cwd: pkgDir });
+                    } catch {
+                        // Ignore abort errors
+                    }
+
+                    // If merge failed, there are likely conflicts
+                    if (mergeError.message?.includes('CONFLICT') || mergeError.stderr?.includes('CONFLICT')) {
+                        checks.mergeConflicts.passed = false;
+                        checks.mergeConflicts.issues.push(
+                            `${pkgName}: Merge conflicts detected with ${targetBranch} branch`
+                        );
+                    } else {
+                        // Some other error - log as warning
+                        checks.mergeConflicts.warnings.push(
+                            `${pkgName}: Could not check for merge conflicts - ${mergeError.message || mergeError}`
+                        );
                     }
                 }
+            }
         } catch (error: any) {
             checks.mergeConflicts.warnings.push(
                 `${pkgName}: Could not check for merge conflicts - ${error.message || error}`
@@ -238,10 +238,10 @@ export async function execute(config: Config): Promise<string> {
                 // Extract owner/repo from repository URL
                 const repoUrl = pkgJson.repository.url;
                 const match = repoUrl.match(/github\.com[:/]([^/]+)\/([^/.]+)/);
-                
+
                 if (match) {
                     const [, owner, repo] = match;
-                    
+
                     try {
                         const octokit = getOctokit();
                         const { data: openPRs } = await octokit.pulls.list({
@@ -274,14 +274,14 @@ export async function execute(config: Config): Promise<string> {
                 );
             }
         }
-        
+
         // 7. Check release workflow readiness (validate build, test, publish dry-run)
         // This check validates that the package can be successfully published
         // Only run if explicitly requested via config flag
         if ((config as any).validateReleaseWorkflow) {
             try {
                 logger.info(`${pkgName}: Validating release workflow readiness...`);
-                
+
                 // Check 1: Build succeeds
                 try {
                     await run('npm run build', { cwd: pkgDir });
@@ -292,7 +292,7 @@ export async function execute(config: Config): Promise<string> {
                         `${pkgName}: Build fails - ${buildError.message || buildError}`
                     );
                 }
-                
+
                 // Check 2: Tests pass
                 try {
                     await run('npm test', { cwd: pkgDir });
@@ -303,7 +303,7 @@ export async function execute(config: Config): Promise<string> {
                         `${pkgName}: Tests fail - ${testError.message || testError}`
                     );
                 }
-                
+
                 // Check 3: Publish dry-run succeeds
                 try {
                     await run('npm publish --dry-run', { cwd: pkgDir });
@@ -314,14 +314,14 @@ export async function execute(config: Config): Promise<string> {
                         `${pkgName}: Publish dry-run fails - ${publishError.message || publishError}`
                     );
                 }
-                
+
                 // Check 4: NPM_TOKEN environment variable
                 if (!process.env.NPM_TOKEN) {
                     checks.releaseWorkflow.warnings.push(
                         `${pkgName}: NPM_TOKEN environment variable not set (required for publishing)`
                     );
                 }
-                
+
                 // Check 5: GitHub workflow file exists
                 const workflowPath = path.join(pkgDir, '.github', 'workflows', 'npm-publish.yml');
                 try {
@@ -332,7 +332,7 @@ export async function execute(config: Config): Promise<string> {
                         `${pkgName}: GitHub workflow file not found at .github/workflows/npm-publish.yml`
                     );
                 }
-                
+
             } catch (error: any) {
                 checks.releaseWorkflow.warnings.push(
                     `${pkgName}: Could not validate release workflow - ${error.message || error}`
@@ -348,7 +348,7 @@ export async function execute(config: Config): Promise<string> {
                      checks.devVersion.passed &&
                      checks.openPRs.passed;
 
-    const hasWarnings = checks.linkStatus.warnings.length > 0 || 
+    const hasWarnings = checks.linkStatus.warnings.length > 0 ||
                        checks.mergeConflicts.warnings.length > 0 ||
                        checks.openPRs.warnings.length > 0 ||
                        checks.releaseWorkflow.warnings.length > 0;
@@ -373,37 +373,37 @@ export async function execute(config: Config): Promise<string> {
         }
     } else {
         summary += `⚠️  Status: NOT READY\n\n`;
-        
+
         if (!checks.branch.passed) {
             summary += `❌ Branch Issues:\n`;
             checks.branch.issues.forEach(issue => summary += `   - ${issue}\n`);
             summary += `\n`;
         }
-        
+
         if (!checks.remoteSync.passed) {
             summary += `❌ Remote Sync Issues:\n`;
             checks.remoteSync.issues.forEach(issue => summary += `   - ${issue}\n`);
             summary += `\n`;
         }
-        
+
         if (!checks.mergeConflicts.passed) {
             summary += `❌ Merge Conflict Issues:\n`;
             checks.mergeConflicts.issues.forEach(issue => summary += `   - ${issue}\n`);
             summary += `\n`;
         }
-        
+
         if (!checks.devVersion.passed) {
             summary += `❌ Dev Version Issues:\n`;
             checks.devVersion.issues.forEach(issue => summary += `   - ${issue}\n`);
             summary += `\n`;
         }
-        
+
         if (!checks.openPRs.passed) {
             summary += `❌ Open PR Issues:\n`;
             checks.openPRs.issues.forEach(issue => summary += `   - ${issue}\n`);
             summary += `\n`;
         }
-        
+
         if (!checks.releaseWorkflow.passed) {
             summary += `❌ Release Workflow Issues:\n`;
             checks.releaseWorkflow.issues.forEach(issue => summary += `   - ${issue}\n`);

@@ -61,7 +61,7 @@ export async function execute(config: Config): Promise<string> {
         branch: { passed: true, issues: [] as string[] },
         remoteSync: { passed: true, issues: [] as string[] },
         devVersion: { passed: true, issues: [] as string[] },
-        linkStatus: { passed: true, issues: [] as string[] },
+        linkStatus: { passed: true, issues: [] as string[], warnings: [] as string[] },
         openPRs: { passed: true, issues: [] as string[], warnings: [] as string[] },
     };
 
@@ -136,7 +136,7 @@ export async function execute(config: Config): Promise<string> {
             }
         }
 
-        // 4. Check link status
+        // 4. Check link status (warning only - links are recommended but not required)
         if (pkgJson.dependencies || pkgJson.devDependencies) {
             try {
                 const linkedDeps = await getLinkedDependencies(pkgDir);
@@ -149,13 +149,13 @@ export async function execute(config: Config): Promise<string> {
                 const unlinkedLocal = localDeps.filter(dep => !linkedDeps.has(dep));
 
                 if (unlinkedLocal.length > 0) {
-                    checks.linkStatus.passed = false;
-                    checks.linkStatus.issues.push(
-                        `${pkgName}: Local dependencies not linked: ${unlinkedLocal.join(', ')}`
+                    // Don't fail the check, just warn - links are recommended but not required
+                    checks.linkStatus.warnings.push(
+                        `${pkgName}: Local dependencies not linked (recommended): ${unlinkedLocal.join(', ')}`
                     );
                 }
             } catch (error: any) {
-                checks.linkStatus.issues.push(`${pkgName}: Could not check link status - ${error.message || error}`);
+                checks.linkStatus.warnings.push(`${pkgName}: Could not check link status - ${error.message || error}`);
             }
         }
 
@@ -206,12 +206,13 @@ export async function execute(config: Config): Promise<string> {
         }
     }
 
-    // Build summary
+    // Build summary - linkStatus is not included in allPassed (it's a recommendation, not a requirement)
     const allPassed = checks.branch.passed &&
                      checks.remoteSync.passed &&
                      checks.devVersion.passed &&
-                     checks.linkStatus.passed &&
                      checks.openPRs.passed;
+
+    const hasWarnings = checks.linkStatus.warnings.length > 0 || checks.openPRs.warnings.length > 0;
 
     // Log results
     let summary = `\n${'='.repeat(60)}\n`;
@@ -222,12 +223,14 @@ export async function execute(config: Config): Promise<string> {
 
     if (allPassed) {
         summary += `✅ Status: READY FOR DEVELOPMENT\n\n`;
-        summary += `All checks passed:\n`;
+        summary += `All required checks passed:\n`;
         summary += `  ✓ Branch status\n`;
         summary += `  ✓ Remote sync\n`;
         summary += `  ✓ Dev versions\n`;
-        summary += `  ✓ Link status\n`;
         summary += `  ✓ No open PRs\n`;
+        if (!hasWarnings) {
+            summary += `  ✓ All local dependencies linked\n`;
+        }
     } else {
         summary += `⚠️  Status: NOT READY\n\n`;
         
@@ -249,12 +252,6 @@ export async function execute(config: Config): Promise<string> {
             summary += `\n`;
         }
         
-        if (!checks.linkStatus.passed) {
-            summary += `❌ Link Status Issues:\n`;
-            checks.linkStatus.issues.forEach(issue => summary += `   - ${issue}\n`);
-            summary += `\n`;
-        }
-        
         if (!checks.openPRs.passed) {
             summary += `❌ Open PR Issues:\n`;
             checks.openPRs.issues.forEach(issue => summary += `   - ${issue}\n`);
@@ -263,8 +260,9 @@ export async function execute(config: Config): Promise<string> {
     }
 
     // Log warnings separately (non-blocking)
-    if (checks.openPRs.warnings.length > 0) {
-        summary += `⚠️  Warnings:\n`;
+    if (hasWarnings) {
+        summary += `⚠️  Recommendations:\n`;
+        checks.linkStatus.warnings.forEach(warning => summary += `   - ${warning}\n`);
         checks.openPRs.warnings.forEach(warning => summary += `   - ${warning}\n`);
         summary += `\n`;
     }

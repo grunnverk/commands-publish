@@ -50,6 +50,7 @@
     "@grunnverk/git-tools": "^1.5.1",
     "@grunnverk/github-tools": "^1.5.1",
     "@grunnverk/shared": "^1.5.3",
+    "@grunnverk/tree-core": "^1.5.1",
     "@riotprompt/riotprompt": "^0.0.21",
     "dotenv": "^17.2.1",
     "openai": "^6.3.0",

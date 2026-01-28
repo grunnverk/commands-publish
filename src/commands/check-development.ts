@@ -1,0 +1,275 @@
+#!/usr/bin/env node
+/**
+ * Check Development Command - Verifies development readiness
+ *
+ * This command checks:
+ * 1. Branch status (not on main/master)
+ * 2. Remote sync status
+ * 3. Dev version status
+ * 4. Link status for local dependencies
+ * 5. Open PRs from working branch
+ */
+
+import { Config, getLogger } from '@grunnverk/core';
+import { scanForPackageJsonFiles } from '@grunnverk/tree-core';
+import { getGitStatusSummary, getLinkedDependencies, run } from '@grunnverk/git-tools';
+import { getOctokit } from '@grunnverk/github-tools';
+import { isDevelopmentVersion } from '@grunnverk/core';
+import { readFile } from 'fs/promises';
+import * as path from 'path';
+
+/**
+ * Default patterns for subprojects to exclude from scanning
+ */
+const DEFAULT_EXCLUDE_SUBPROJECTS = [
+    'doc/',
+    'docs/',
+    'test-*/',
+];
+
+/**
+ * Execute check-development command
+ */
+export async function execute(config: Config): Promise<string> {
+    const logger = getLogger();
+    // Get directory from config - check multiple possible locations
+    const directory = (config as any).directory || 
+                     config.tree?.directories?.[0] || 
+                     process.cwd();
+
+    logger.info(`Checking development readiness in ${directory}`);
+
+    // Build exclusion patterns
+    const excludedPatterns = [
+        '**/node_modules/**',
+        '**/dist/**',
+        '**/build/**',
+        '**/.git/**',
+        ...DEFAULT_EXCLUDE_SUBPROJECTS.map((pattern: string) => {
+            const normalized = pattern.endsWith('/') ? pattern.slice(0, -1) : pattern;
+            return `**/${normalized}/**`;
+        }),
+    ];
+
+    // Determine if this is a tree or single package
+    const packageJsonFiles = await scanForPackageJsonFiles(directory, excludedPatterns);
+    const isTree = packageJsonFiles.length > 1;
+
+    logger.info(`Detected ${isTree ? 'tree' : 'single package'} with ${packageJsonFiles.length} package(s)`);
+
+    const checks = {
+        branch: { passed: true, issues: [] as string[] },
+        remoteSync: { passed: true, issues: [] as string[] },
+        devVersion: { passed: true, issues: [] as string[] },
+        linkStatus: { passed: true, issues: [] as string[] },
+        openPRs: { passed: true, issues: [] as string[], warnings: [] as string[] },
+    };
+
+    const packagesToCheck = isTree ? packageJsonFiles : [path.join(directory, 'package.json')];
+
+    // Build a set of all local package names for link status checking
+    const localPackageNames = new Set<string>();
+    for (const pkgJsonPath of packagesToCheck) {
+        try {
+            const pkgJsonContent = await readFile(pkgJsonPath, 'utf-8');
+            const pkgJson = JSON.parse(pkgJsonContent);
+            if (pkgJson.name) {
+                localPackageNames.add(pkgJson.name);
+            }
+        } catch {
+            // Skip packages we can't read
+        }
+    }
+
+    for (const pkgJsonPath of packagesToCheck) {
+        const pkgDir = path.dirname(pkgJsonPath);
+        const pkgJsonContent = await readFile(pkgJsonPath, 'utf-8');
+        const pkgJson = JSON.parse(pkgJsonContent);
+        const pkgName = pkgJson.name || path.basename(pkgDir);
+
+        // 1. Check branch status
+        try {
+            const gitStatus = await getGitStatusSummary(pkgDir);
+            if (gitStatus.branch === 'main' || gitStatus.branch === 'master') {
+                checks.branch.passed = false;
+                checks.branch.issues.push(`${pkgName} is on ${gitStatus.branch} branch`);
+            }
+        } catch (error: any) {
+            checks.branch.issues.push(`${pkgName}: Could not check branch - ${error.message || error}`);
+        }
+
+        // 2. Check remote sync status
+        try {
+            await run('git fetch', { cwd: pkgDir });
+            const { stdout: statusOutput } = await run('git status -sb', { cwd: pkgDir });
+
+            if (statusOutput.includes('behind')) {
+                checks.remoteSync.passed = false;
+                const match = statusOutput.match(/behind (\d+)/);
+                const count = match ? match[1] : 'some';
+                checks.remoteSync.issues.push(`${pkgName} is ${count} commits behind remote`);
+            }
+        } catch (error: any) {
+            checks.remoteSync.issues.push(`${pkgName}: Could not check remote sync - ${error.message || error}`);
+        }
+
+        // 3. Check dev version status
+        const version = pkgJson.version;
+        if (!version) {
+            checks.devVersion.issues.push(`${pkgName}: No version field in package.json`);
+        } else if (!isDevelopmentVersion(version)) {
+            checks.devVersion.passed = false;
+            checks.devVersion.issues.push(`${pkgName} has non-dev version: ${version}`);
+        } else {
+            // Check if base version exists on npm
+            const baseVersion = version.split('-')[0];
+            try {
+                const { stdout } = await run(`npm view ${pkgName}@${baseVersion} version`, { cwd: pkgDir });
+                if (stdout.trim() === baseVersion) {
+                    checks.devVersion.passed = false;
+                    checks.devVersion.issues.push(
+                        `${pkgName}: Base version ${baseVersion} already published (current: ${version})`
+                    );
+                }
+            } catch {
+                // Version doesn't exist on npm, which is good
+            }
+        }
+
+        // 4. Check link status
+        if (pkgJson.dependencies || pkgJson.devDependencies) {
+            try {
+                const linkedDeps = await getLinkedDependencies(pkgDir);
+                const allDeps = {
+                    ...pkgJson.dependencies,
+                    ...pkgJson.devDependencies,
+                };
+
+                const localDeps = Object.keys(allDeps).filter(dep => localPackageNames.has(dep));
+                const unlinkedLocal = localDeps.filter(dep => !linkedDeps.has(dep));
+
+                if (unlinkedLocal.length > 0) {
+                    checks.linkStatus.passed = false;
+                    checks.linkStatus.issues.push(
+                        `${pkgName}: Local dependencies not linked: ${unlinkedLocal.join(', ')}`
+                    );
+                }
+            } catch (error: any) {
+                checks.linkStatus.issues.push(`${pkgName}: Could not check link status - ${error.message || error}`);
+            }
+        }
+
+        // 5. Check for open PRs from working branch
+        if (pkgJson.repository?.url) {
+            try {
+                const gitStatus = await getGitStatusSummary(pkgDir);
+                const currentBranch = gitStatus.branch;
+
+                // Extract owner/repo from repository URL
+                const repoUrl = pkgJson.repository.url;
+                const match = repoUrl.match(/github\.com[:/]([^/]+)\/([^/.]+)/);
+                
+                if (match) {
+                    const [, owner, repo] = match;
+                    
+                    try {
+                        const octokit = getOctokit();
+                        const { data: openPRs } = await octokit.pulls.list({
+                            owner,
+                            repo,
+                            state: 'open',
+                            head: `${owner}:${currentBranch}`,
+                        });
+
+                        if (openPRs.length > 0) {
+                            checks.openPRs.passed = false;
+                            for (const pr of openPRs) {
+                                const prInfo = `PR #${pr.number}: ${pr.title} (${pr.html_url})`;
+                                checks.openPRs.issues.push(`${pkgName}: ${prInfo}`);
+                            }
+                        }
+                    } catch (prError: any) {
+                        // Only log if it's not a 404 (repo might not exist on GitHub)
+                        if (!prError.message?.includes('404') && (!prError.status || prError.status !== 404)) {
+                            checks.openPRs.warnings.push(
+                                `${pkgName}: Could not check PRs - ${prError.message || prError}`
+                            );
+                        }
+                    }
+                }
+            } catch (error: any) {
+                // Don't fail the check if we can't check PRs
+                checks.openPRs.warnings.push(
+                    `${pkgName}: Could not check for open PRs - ${error.message || error}`
+                );
+            }
+        }
+    }
+
+    // Build summary
+    const allPassed = checks.branch.passed &&
+                     checks.remoteSync.passed &&
+                     checks.devVersion.passed &&
+                     checks.linkStatus.passed &&
+                     checks.openPRs.passed;
+
+    // Log results
+    let summary = `\n${'='.repeat(60)}\n`;
+    summary += `Development Readiness Check\n`;
+    summary += `${'='.repeat(60)}\n\n`;
+    summary += `Type: ${isTree ? 'Tree (monorepo)' : 'Single package'}\n`;
+    summary += `Packages checked: ${packagesToCheck.length}\n\n`;
+
+    if (allPassed) {
+        summary += `✅ Status: READY FOR DEVELOPMENT\n\n`;
+        summary += `All checks passed:\n`;
+        summary += `  ✓ Branch status\n`;
+        summary += `  ✓ Remote sync\n`;
+        summary += `  ✓ Dev versions\n`;
+        summary += `  ✓ Link status\n`;
+        summary += `  ✓ No open PRs\n`;
+    } else {
+        summary += `⚠️  Status: NOT READY\n\n`;
+        
+        if (!checks.branch.passed) {
+            summary += `❌ Branch Issues:\n`;
+            checks.branch.issues.forEach(issue => summary += `   - ${issue}\n`);
+            summary += `\n`;
+        }
+        
+        if (!checks.remoteSync.passed) {
+            summary += `❌ Remote Sync Issues:\n`;
+            checks.remoteSync.issues.forEach(issue => summary += `   - ${issue}\n`);
+            summary += `\n`;
+        }
+        
+        if (!checks.devVersion.passed) {
+            summary += `❌ Dev Version Issues:\n`;
+            checks.devVersion.issues.forEach(issue => summary += `   - ${issue}\n`);
+            summary += `\n`;
+        }
+        
+        if (!checks.linkStatus.passed) {
+            summary += `❌ Link Status Issues:\n`;
+            checks.linkStatus.issues.forEach(issue => summary += `   - ${issue}\n`);
+            summary += `\n`;
+        }
+        
+        if (!checks.openPRs.passed) {
+            summary += `❌ Open PR Issues:\n`;
+            checks.openPRs.issues.forEach(issue => summary += `   - ${issue}\n`);
+            summary += `\n`;
+        }
+    }
+
+    // Log warnings separately (non-blocking)
+    if (checks.openPRs.warnings.length > 0) {
+        summary += `⚠️  Warnings:\n`;
+        checks.openPRs.warnings.forEach(warning => summary += `   - ${warning}\n`);
+        summary += `\n`;
+    }
+
+    summary += `${'='.repeat(60)}\n`;
+
+    return summary;
+}

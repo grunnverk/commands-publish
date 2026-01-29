@@ -24,6 +24,7 @@ import * as path from 'path';
 const DEFAULT_EXCLUDE_SUBPROJECTS = [
     'doc/',
     'docs/',
+    'examples/',
     'test-*/',
 ];
 
@@ -37,7 +38,10 @@ export async function execute(config: Config): Promise<string> {
                      config.tree?.directories?.[0] ||
                      process.cwd();
 
-    logger.info(`Checking development readiness in ${directory}`);
+    // Get validateRelease flag - controls merge conflicts and open PRs checks
+    const validateRelease = (config as any).validateReleaseWorkflow ?? false;
+
+    logger.info(`Checking development readiness in ${directory}${validateRelease ? ' (full release validation)' : ' (quick check)'}`);
 
     // Build exclusion patterns
     const excludedPatterns = [
@@ -115,7 +119,7 @@ export async function execute(config: Config): Promise<string> {
             checks.remoteSync.issues.push(`${pkgName}: Could not check remote sync - ${error.message || error}`);
         }
 
-        // 3. Check for merge conflicts with target branch (main)
+        // 3. Check for merge conflicts with target branch (main) - ALWAYS CHECK THIS
         try {
             const gitStatus = await getGitStatusSummary(pkgDir);
             const currentBranch = gitStatus.branch;
@@ -229,8 +233,8 @@ export async function execute(config: Config): Promise<string> {
             }
         }
 
-        // 6. Check for open PRs from working branch
-        if (pkgJson.repository?.url) {
+        // 6. Check for open PRs from working branch - only if validateRelease is true
+        if (validateRelease && pkgJson.repository?.url) {
             try {
                 const gitStatus = await getGitStatusSummary(pkgDir);
                 const currentBranch = gitStatus.branch;
@@ -342,11 +346,13 @@ export async function execute(config: Config): Promise<string> {
     }
 
     // Build summary - linkStatus and releaseWorkflow are not included in allPassed (recommendations)
+    // mergeConflicts is ALWAYS checked (critical for preventing post-merge failures)
+    // openPRs is only checked when validateRelease is true
     const allPassed = checks.branch.passed &&
                      checks.remoteSync.passed &&
                      checks.mergeConflicts.passed &&
                      checks.devVersion.passed &&
-                     checks.openPRs.passed;
+                     (validateRelease ? checks.openPRs.passed : true);
 
     const hasWarnings = checks.linkStatus.warnings.length > 0 ||
                        checks.mergeConflicts.warnings.length > 0 ||
@@ -355,7 +361,7 @@ export async function execute(config: Config): Promise<string> {
 
     // Log results
     let summary = `\n${'='.repeat(60)}\n`;
-    summary += `Development Readiness Check\n`;
+    summary += `Development Readiness Check${validateRelease ? ' (Full Release Validation)' : ' (Quick Check)'}\n`;
     summary += `${'='.repeat(60)}\n\n`;
     summary += `Type: ${isTree ? 'Tree (monorepo)' : 'Single package'}\n`;
     summary += `Packages checked: ${packagesToCheck.length}\n\n`;
@@ -367,7 +373,9 @@ export async function execute(config: Config): Promise<string> {
         summary += `  ✓ Remote sync\n`;
         summary += `  ✓ No merge conflicts with main\n`;
         summary += `  ✓ Dev versions\n`;
-        summary += `  ✓ No open PRs\n`;
+        if (validateRelease) {
+            summary += `  ✓ No open PRs\n`;
+        }
         if (!hasWarnings) {
             summary += `  ✓ All local dependencies linked\n`;
         }
@@ -398,7 +406,7 @@ export async function execute(config: Config): Promise<string> {
             summary += `\n`;
         }
 
-        if (!checks.openPRs.passed) {
+        if (validateRelease && !checks.openPRs.passed) {
             summary += `❌ Open PR Issues:\n`;
             checks.openPRs.issues.forEach(issue => summary += `   - ${issue}\n`);
             summary += `\n`;
@@ -416,7 +424,9 @@ export async function execute(config: Config): Promise<string> {
         summary += `⚠️  Recommendations:\n`;
         checks.linkStatus.warnings.forEach(warning => summary += `   - ${warning}\n`);
         checks.mergeConflicts.warnings.forEach(warning => summary += `   - ${warning}\n`);
-        checks.openPRs.warnings.forEach(warning => summary += `   - ${warning}\n`);
+        if (validateRelease) {
+            checks.openPRs.warnings.forEach(warning => summary += `   - ${warning}\n`);
+        }
         checks.releaseWorkflow.warnings.forEach(warning => summary += `   - ${warning}\n`);
         summary += `\n`;
     }

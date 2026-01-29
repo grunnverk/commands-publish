@@ -611,7 +611,73 @@ export const execute = async (runConfig: Config): Promise<void> => {
         currentBranch = 'mock-branch';
     } else {
         currentBranch = await GitHub.getCurrentBranchName();
+    }
 
+    // Determine target branch EARLY (before expensive operations) for early necessity check
+    let targetBranch = runConfig.publish?.targetBranch || 'main';
+    let branchDependentVersioning = false;
+
+    // Check for branches configuration
+    if (runConfig.branches && runConfig.branches[currentBranch]) {
+        branchDependentVersioning = true;
+
+        const branchConfig = runConfig.branches[currentBranch];
+
+        if (branchConfig.targetBranch) {
+            targetBranch = branchConfig.targetBranch;
+        }
+
+        logger.info(`BRANCH_DEPENDENT_TARGETING: Branch-specific configuration active | Source: ${currentBranch} | Target: ${targetBranch} | Feature: Branch-dependent versioning and targeting`);
+        logger.info(`BRANCH_CONFIGURATION_SOURCE: Current branch | Branch: ${currentBranch} | Type: source`);
+        logger.info(`BRANCH_CONFIGURATION_TARGET: Target branch for publish | Branch: ${targetBranch} | Type: destination`);
+
+        // Look at target branch config to show version strategy
+        const targetBranchConfig = runConfig.branches[targetBranch];
+        if (targetBranchConfig?.version) {
+            const versionType = targetBranchConfig.version.type;
+            const versionTag = targetBranchConfig.version.tag;
+            const versionIncrement = targetBranchConfig.version.increment;
+
+            logger.info(`VERSION_STRATEGY: Target branch version configuration | Branch: ${targetBranch} | Type: ${versionType} | Tag: ${versionTag || 'none'} | Increment: ${versionIncrement ? 'enabled' : 'disabled'}`);
+        }
+    } else {
+        logger.debug(`BRANCH_TARGETING_DEFAULT: No branch-specific configuration found | Branch: ${currentBranch} | Action: Using default target | Target: ${targetBranch}`);
+    }
+
+    // Handle --sync-target flag
+    if (runConfig.publish?.syncTarget) {
+        await handleTargetBranchSyncRecovery(runConfig, targetBranch);
+        return; // Exit after sync operation
+    }
+
+    // OPTIMIZATION: Early check if release is necessary BEFORE expensive operations
+    // This can save 2-4 minutes for packages with no changes by skipping:
+    // - git fetch (~30-60s)
+    // - current branch sync (~30-60s)
+    // - target branch setup (~30-60s)
+    // - prechecks (~30-60s)
+    if (!isDryRun) {
+        logger.info('RELEASE_NECESSITY_CHECK_EARLY: Quick check if release is required | Comparison: current branch vs target | Target: ' + targetBranch + ' | Purpose: Skip expensive operations for unchanged packages');
+        try {
+            const necessity = await isReleaseNecessaryComparedToTarget(targetBranch, isDryRun);
+            if (!necessity.necessary) {
+                logger.info(`\nRELEASE_SKIPPED_EARLY: No meaningful changes detected, skipping publish | Reason: ${necessity.reason} | Target: ${targetBranch} | Time saved: ~2-4 minutes`);
+                // Emit a machine-readable marker so tree mode can detect skip and avoid propagating versions
+                // CRITICAL: Use console.log to write to stdout (logger.info goes to stderr via winston)
+                // eslint-disable-next-line no-console
+                console.log('KODRDRIV_PUBLISH_SKIPPED');
+                return;
+            } else {
+                logger.verbose(`RELEASE_PROCEEDING_EARLY: Meaningful changes detected, continuing with full publish workflow | Reason: ${necessity.reason} | Target: ${targetBranch}`);
+            }
+        } catch (error: any) {
+            // If early check fails (e.g., target branch doesn't exist yet), continue with normal flow
+            logger.verbose(`RELEASE_NECESSITY_CHECK_EARLY_SKIPPED: Unable to perform early check | Error: ${error.message} | Action: Continuing with full workflow | Reason: Target branch may not exist yet or other setup needed`);
+        }
+    }
+
+    // Now perform expensive operations only if we're proceeding with publish
+    if (!isDryRun) {
         // Fetch latest remote information to avoid conflicts
         logger.info('GIT_FETCH_STARTING: Fetching latest remote information | Remote: origin | Purpose: Avoid conflicts during publish | Command: git fetch origin');
         try {
@@ -649,43 +715,6 @@ export const execute = async (runConfig: Config): Promise<void> => {
                 logger.warn(`CURRENT_BRANCH_SYNC_FAILED: Unable to sync current branch with remote | Branch: ${currentBranch} | Remote: origin/${currentBranch} | Error: ${error.message} | Impact: May cause issues during publish`);
             }
         }
-    }
-
-    // Determine target branch and version strategy based on branch configuration
-    let targetBranch = runConfig.publish?.targetBranch || 'main';
-    let branchDependentVersioning = false;
-
-    // Check for branches configuration
-    if (runConfig.branches && runConfig.branches[currentBranch]) {
-        branchDependentVersioning = true;
-
-        const branchConfig = runConfig.branches[currentBranch];
-
-        if (branchConfig.targetBranch) {
-            targetBranch = branchConfig.targetBranch;
-        }
-
-        logger.info(`BRANCH_DEPENDENT_TARGETING: Branch-specific configuration active | Source: ${currentBranch} | Target: ${targetBranch} | Feature: Branch-dependent versioning and targeting`);
-        logger.info(`BRANCH_CONFIGURATION_SOURCE: Current branch | Branch: ${currentBranch} | Type: source`);
-        logger.info(`BRANCH_CONFIGURATION_TARGET: Target branch for publish | Branch: ${targetBranch} | Type: destination`);
-
-        // Look at target branch config to show version strategy
-        const targetBranchConfig = runConfig.branches[targetBranch];
-        if (targetBranchConfig?.version) {
-            const versionType = targetBranchConfig.version.type;
-            const versionTag = targetBranchConfig.version.tag;
-            const versionIncrement = targetBranchConfig.version.increment;
-
-            logger.info(`VERSION_STRATEGY: Target branch version configuration | Branch: ${targetBranch} | Type: ${versionType} | Tag: ${versionTag || 'none'} | Increment: ${versionIncrement ? 'enabled' : 'disabled'}`);
-        }
-    } else {
-        logger.debug(`BRANCH_TARGETING_DEFAULT: No branch-specific configuration found | Branch: ${currentBranch} | Action: Using default target | Target: ${targetBranch}`);
-    }
-
-    // Handle --sync-target flag
-    if (runConfig.publish?.syncTarget) {
-        await handleTargetBranchSyncRecovery(runConfig, targetBranch);
-        return; // Exit after sync operation
     }
 
     // Check if target branch exists and create it if needed
@@ -733,25 +762,6 @@ export const execute = async (runConfig: Config): Promise<void> => {
 
     // Run prechecks before starting any work
     await runPrechecks(runConfig, targetBranch);
-
-    // Early check: determine if a release is necessary compared to target branch
-    logger.info('RELEASE_NECESSITY_CHECK: Evaluating if release is required | Comparison: current branch vs target | Target: ' + targetBranch + ' | Purpose: Avoid unnecessary publishes');
-    try {
-        const necessity = await isReleaseNecessaryComparedToTarget(targetBranch, isDryRun);
-        if (!necessity.necessary) {
-            logger.info(`\nRELEASE_SKIPPED: No meaningful changes detected, skipping publish | Reason: ${necessity.reason} | Target: ${targetBranch}`);
-            // Emit a machine-readable marker so tree mode can detect skip and avoid propagating versions
-            // CRITICAL: Use console.log to write to stdout (logger.info goes to stderr via winston)
-            // eslint-disable-next-line no-console
-            console.log('KODRDRIV_PUBLISH_SKIPPED');
-            return;
-        } else {
-            logger.verbose(`RELEASE_PROCEEDING: Meaningful changes detected, continuing with publish | Reason: ${necessity.reason} | Target: ${targetBranch}`);
-        }
-    } catch (error: any) {
-        // On unexpected errors, proceed with publish to avoid false negatives blocking releases
-        logger.verbose(`RELEASE_NECESSITY_CHECK_ERROR: Unable to determine release necessity | Error: ${error.message} | Action: Proceeding conservatively with publish | Rationale: Avoid blocking valid releases`);
-    }
 
     logger.info('RELEASE_PROCESS_STARTING: Initiating release workflow | Target: ' + targetBranch + ' | Phase: dependency updates and version management');
 
@@ -1015,9 +1025,11 @@ export const execute = async (runConfig: Config): Promise<void> => {
 
                     if (runConfig.publish?.skipAlreadyPublished) {
                         logger.info('PUBLISH_SKIPPED_FLAG: Skipping package due to flag | Flag: --skip-already-published | Version: ' + proposedVersion + ' | Status: skipped');
-                        // Emit skip marker for tree mode detection
+                        // Emit skip marker for tree mode detection with reason
                         // eslint-disable-next-line no-console
                         console.log('KODRDRIV_PUBLISH_SKIPPED');
+                        // eslint-disable-next-line no-console
+                        console.log('KODRDRIV_PUBLISH_SKIP_REASON:already-published');
                         return; // Exit without error
                     } else {
                         throw new Error(`Version ${proposedVersion} already published. Use --skip-already-published to continue.`);

@@ -8,7 +8,6 @@ import { getLogger, getDryRunLogger, Config, PullRequest, Diff, getOutputPath, c
 import { run, runWithDryRunSupport, runSecure, validateGitRef, safeJsonParse, validatePackageJson, isBranchInSyncWithRemote, safeSyncBranchWithRemote, localBranchExists, remoteBranchExists } from '@grunnverk/git-tools';
 import * as GitHub from '@grunnverk/github-tools';
 import { createStorage, incrementPatchVersion, calculateTargetVersion } from '@grunnverk/shared';
-import { runAgenticPublish, formatAgenticPublishResult } from '@grunnverk/ai-service';
 
 const scanNpmrcForEnvVars = async (storage: any): Promise<string[]> => {
     const logger = getLogger();
@@ -336,52 +335,6 @@ const runPrechecks = async (runConfig: Config, targetBranch?: string): Promise<v
                     logger.error(`BRANCH_SYNC_DIVERGENCE: Local and remote commits differ | Local SHA: ${syncStatus.localSha.substring(0, 8)} | Remote SHA: ${syncStatus.remoteSha.substring(0, 8)}`);
                 }
 
-                // Check if agentic publish is enabled
-                if (runConfig.publish?.agenticPublish) {
-                    logger.info('');
-                    logger.info('AGENTIC_PUBLISH_STARTING: Attempting automatic diagnosis and fix | Mode: agentic | Feature: AI-powered recovery');
-
-                    try {
-                        const currentBranch = await GitHub.getCurrentBranchName();
-                        const agenticResult = await runAgenticPublish({
-                            targetBranch: effectiveTargetBranch,
-                            sourceBranch: currentBranch,
-                            issue: 'branch_sync',
-                            issueDetails: syncStatus.error || `Local SHA: ${syncStatus.localSha?.substring(0, 8)}, Remote SHA: ${syncStatus.remoteSha?.substring(0, 8)}`,
-                            workingDirectory: process.cwd(),
-                            maxIterations: runConfig.publish?.agenticPublishMaxIterations || 10,
-                            storage,
-                            logger,
-                            dryRun: runConfig.dryRun,
-                        });
-
-                        // Display the formatted result
-                        const formattedResult = formatAgenticPublishResult(agenticResult);
-                        logger.info(formattedResult);
-
-                        if (agenticResult.success) {
-                            logger.info('AGENTIC_PUBLISH_SUCCESS: Issue resolved automatically | Status: ready-to-retry | Action: Re-running prechecks');
-                            // Re-run the sync check to verify it was fixed
-                            const reSyncStatus = await isBranchInSyncWithRemote(effectiveTargetBranch);
-                            if (reSyncStatus.inSync) {
-                                logger.info(`BRANCH_SYNC_VERIFIED: Target branch is now synchronized with remote | Branch: ${effectiveTargetBranch} | Status: in-sync`);
-                                return; // Continue with publish
-                            } else {
-                                logger.warn('AGENTIC_PUBLISH_VERIFICATION_FAILED: Branch still not in sync after agentic fix | Status: needs-attention');
-                            }
-                        }
-
-                        if (agenticResult.requiresManualIntervention) {
-                            throw new Error(`Target branch '${effectiveTargetBranch}' requires manual intervention. Please see the steps above.`);
-                        } else {
-                            throw new Error(`Agentic publish could not resolve the issue automatically. Please see the analysis above.`);
-                        }
-                    } catch (agenticError: any) {
-                        logger.warn(`AGENTIC_PUBLISH_FAILED: Agentic recovery failed | Error: ${agenticError.message} | Fallback: Manual steps`);
-                        // Fall through to manual steps
-                    }
-                }
-
                 logger.error('');
                 logger.error('RESOLUTION_STEPS: Manual intervention required to sync branches:');
                 logger.error(`   Step 1: Switch to target branch | Command: git checkout ${effectiveTargetBranch}`);
@@ -390,7 +343,6 @@ const runPrechecks = async (runConfig: Config, targetBranch?: string): Promise<v
                 logger.error('   Step 4: Return to feature branch and retry publish');
                 logger.error('');
                 logger.error(`ALTERNATIVE_OPTION: Automatic sync available | Command: kodrdriv publish --sync-target | Branch: ${effectiveTargetBranch}`);
-                logger.error(`ALTERNATIVE_OPTION_AI: AI-powered recovery available | Command: kodrdriv publish --agentic-publish | Branch: ${effectiveTargetBranch}`);
 
                 throw new Error(`Target branch '${effectiveTargetBranch}' is not in sync with remote. Please sync the branch before running publish.`);
             } else {
@@ -1596,8 +1548,8 @@ export const execute = async (runConfig: Config): Promise<void> => {
             try {
                 // Verify that remote working branch is ancestor of main (safety check)
                 try {
-                    await run(`git fetch origin ${currentBranch}`);
-                    await run(`git merge-base --is-ancestor origin/${currentBranch} ${targetBranch}`);
+                    await run(`git fetch origin ${currentBranch}`, { suppressErrorLogging: true });
+                    await run(`git merge-base --is-ancestor origin/${currentBranch} ${targetBranch}`, { suppressErrorLogging: true });
                     logger.verbose(`✓ Safety check passed: origin/${currentBranch} is ancestor of ${targetBranch}`);
                 } catch {
                     // Remote branch might not exist yet, or already in sync - both OK

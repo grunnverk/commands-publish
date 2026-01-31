@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { Formatter, Model } from '@riotprompt/riotprompt';
+import { Formatter, Model } from '@kjerneverk/riotprompt';
 import 'dotenv/config';
 import type { ChatCompletionMessageParam } from 'openai/resources';
 import { getDefaultFromRef, getCurrentBranch, safeJsonParse } from '@grunnverk/git-tools';

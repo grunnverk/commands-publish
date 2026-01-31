@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type { Config } from '@grunnverk/core';
 
 // Mock ALL dependencies BEFORE importing
-vi.mock('@riotprompt/riotprompt', () => ({
+vi.mock('@kjerneverk/riotprompt', () => ({
     Formatter: { create: vi.fn(() => ({ formatPrompt: vi.fn(() => ({ messages: [] })) })) },
     Model: {}
 }));

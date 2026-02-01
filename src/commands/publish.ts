@@ -8,7 +8,6 @@ import { getLogger, getDryRunLogger, Config, PullRequest, Diff, getOutputPath, c
 import { run, runWithDryRunSupport, runSecure, validateGitRef, safeJsonParse, validatePackageJson, isBranchInSyncWithRemote, safeSyncBranchWithRemote, localBranchExists, remoteBranchExists } from '@grunnverk/git-tools';
 import * as GitHub from '@grunnverk/github-tools';
 import { createStorage, incrementPatchVersion, calculateTargetVersion } from '@grunnverk/shared';
-import { runAgenticPublish, formatAgenticPublishResult } from '@grunnverk/ai-service';
 
 const scanNpmrcForEnvVars = async (storage: any): Promise<string[]> => {
     const logger = getLogger();
@@ -336,52 +335,6 @@ const runPrechecks = async (runConfig: Config, targetBranch?: string): Promise<v
                     logger.error(`BRANCH_SYNC_DIVERGENCE: Local and remote commits differ | Local SHA: ${syncStatus.localSha.substring(0, 8)} | Remote SHA: ${syncStatus.remoteSha.substring(0, 8)}`);
                 }
 
-                // Check if agentic publish is enabled
-                if (runConfig.publish?.agenticPublish) {
-                    logger.info('');
-                    logger.info('AGENTIC_PUBLISH_STARTING: Attempting automatic diagnosis and fix | Mode: agentic | Feature: AI-powered recovery');
-
-                    try {
-                        const currentBranch = await GitHub.getCurrentBranchName();
-                        const agenticResult = await runAgenticPublish({
-                            targetBranch: effectiveTargetBranch,
-                            sourceBranch: currentBranch,
-                            issue: 'branch_sync',
-                            issueDetails: syncStatus.error || `Local SHA: ${syncStatus.localSha?.substring(0, 8)}, Remote SHA: ${syncStatus.remoteSha?.substring(0, 8)}`,
-                            workingDirectory: process.cwd(),
-                            maxIterations: runConfig.publish?.agenticPublishMaxIterations || 10,
-                            storage,
-                            logger,
-                            dryRun: runConfig.dryRun,
-                        });
-
-                        // Display the formatted result
-                        const formattedResult = formatAgenticPublishResult(agenticResult);
-                        logger.info(formattedResult);
-
-                        if (agenticResult.success) {
-                            logger.info('AGENTIC_PUBLISH_SUCCESS: Issue resolved automatically | Status: ready-to-retry | Action: Re-running prechecks');
-                            // Re-run the sync check to verify it was fixed
-                            const reSyncStatus = await isBranchInSyncWithRemote(effectiveTargetBranch);
-                            if (reSyncStatus.inSync) {
-                                logger.info(`BRANCH_SYNC_VERIFIED: Target branch is now synchronized with remote | Branch: ${effectiveTargetBranch} | Status: in-sync`);
-                                return; // Continue with publish
-                            } else {
-                                logger.warn('AGENTIC_PUBLISH_VERIFICATION_FAILED: Branch still not in sync after agentic fix | Status: needs-attention');
-                            }
-                        }
-
-                        if (agenticResult.requiresManualIntervention) {
-                            throw new Error(`Target branch '${effectiveTargetBranch}' requires manual intervention. Please see the steps above.`);
-                        } else {
-                            throw new Error(`Agentic publish could not resolve the issue automatically. Please see the analysis above.`);
-                        }
-                    } catch (agenticError: any) {
-                        logger.warn(`AGENTIC_PUBLISH_FAILED: Agentic recovery failed | Error: ${agenticError.message} | Fallback: Manual steps`);
-                        // Fall through to manual steps
-                    }
-                }
-
                 logger.error('');
                 logger.error('RESOLUTION_STEPS: Manual intervention required to sync branches:');
                 logger.error(`   Step 1: Switch to target branch | Command: git checkout ${effectiveTargetBranch}`);
@@ -390,7 +343,6 @@ const runPrechecks = async (runConfig: Config, targetBranch?: string): Promise<v
                 logger.error('   Step 4: Return to feature branch and retry publish');
                 logger.error('');
                 logger.error(`ALTERNATIVE_OPTION: Automatic sync available | Command: kodrdriv publish --sync-target | Branch: ${effectiveTargetBranch}`);
-                logger.error(`ALTERNATIVE_OPTION_AI: AI-powered recovery available | Command: kodrdriv publish --agentic-publish | Branch: ${effectiveTargetBranch}`);
 
                 throw new Error(`Target branch '${effectiveTargetBranch}' is not in sync with remote. Please sync the branch before running publish.`);
             } else {
@@ -779,6 +731,18 @@ export const execute = async (runConfig: Config): Promise<void> => {
 
     if (pr) {
         logger.info(`PR_FOUND: Existing pull request detected for current branch | URL: ${pr.html_url} | Status: open`);
+        
+        // Even when PR exists, we need to determine the version for tagging later
+        logger.info('VERSION_DETERMINATION: Determining version from current package.json | Purpose: Tag creation after merge');
+        if (!isDryRun) {
+            const packageJsonContents = await storage.readFile('package.json', 'utf-8');
+            const parsed = safeJsonParse(packageJsonContents, 'package.json');
+            const packageJson = validatePackageJson(parsed, 'package.json');
+            newVersion = packageJson.version;
+            logger.info(`VERSION_DETECTED: Version determined from package.json | Version: ${newVersion} | Source: current working branch`);
+        } else {
+            newVersion = '1.0.0'; // Mock version for dry run
+        }
     } else {
         logger.info('PR_NOT_FOUND: No open pull request exists for current branch | Action: Starting new release publishing process | Next: Prepare dependencies and version');
 
@@ -848,120 +812,13 @@ export const execute = async (runConfig: Config): Promise<void> => {
             }
         }
 
-        // STEP 3: Merge target branch into working branch (optional - now skipped by default since post-publish sync keeps branches in sync)
-        const skipPreMerge = runConfig.publish?.skipPrePublishMerge !== false; // Default to true (skip)
-
-        if (skipPreMerge) {
-            logger.verbose(`PRE_MERGE_SKIPPED: Skipping pre-publish merge of target branch | Reason: Post-publish sync handles branch synchronization | Target: ${targetBranch} | Config: skipPrePublishMerge=true`);
-        } else {
-            logger.info(`PRE_MERGE_STARTING: Merging target branch into current branch | Target: ${targetBranch} | Purpose: Avoid version conflicts | Phase: pre-publish`);
-            if (isDryRun) {
-                logger.info(`Would merge ${targetBranch} into current branch`);
-            } else {
-                // Wrap entire merge process with git lock (involves fetch, merge, checkout, add, commit)
-                await runGitWithLock(process.cwd(), async () => {
-                    // Fetch the latest target branch
-                    try {
-                        await run(`git fetch origin ${targetBranch}:${targetBranch}`);
-                        logger.info(`TARGET_BRANCH_FETCHED: Successfully fetched latest target branch | Branch: ${targetBranch} | Remote: origin/${targetBranch} | Purpose: Pre-merge sync`);
-                    } catch (fetchError: any) {
-                        logger.warn(`TARGET_BRANCH_FETCH_FAILED: Unable to fetch target branch | Branch: ${targetBranch} | Error: ${fetchError.message} | Impact: Proceeding without merge, PR may have conflicts`);
-                        logger.warn('MERGE_SKIPPED_NO_FETCH: Continuing without pre-merge | Reason: Target branch fetch failed | Impact: PR may require manual conflict resolution');
-                    }
-
-                    // Check if merge is needed (avoid unnecessary merge commits)
-                    try {
-                        const { stdout: mergeBase } = await run(`git merge-base HEAD ${targetBranch}`);
-                        const { stdout: targetCommit } = await run(`git rev-parse ${targetBranch}`);
-
-                        if (mergeBase.trim() === targetCommit.trim()) {
-                            logger.info(`MERGE_NOT_NEEDED: Current branch already up-to-date with target | Branch: ${targetBranch} | Status: in-sync | Action: Skipping merge`);
-                        } else {
-                        // Try to merge target branch into current branch
-                            let mergeSucceeded = false;
-                            try {
-                                await run(`git merge ${targetBranch} --no-edit -m "Merge ${targetBranch} to sync before version bump"`);
-                                logger.info(`MERGE_SUCCESS: Successfully merged target branch into current branch | Target: ${targetBranch} | Purpose: Sync before version bump`);
-                                mergeSucceeded = true;
-                            } catch (mergeError: any) {
-                            // If merge conflicts occur, check if they're only in version-related files
-                                const errorText = [mergeError.message || '', mergeError.stdout || '', mergeError.stderr || ''].join(' ');
-                                if (errorText.includes('CONFLICT')) {
-                                    logger.warn(`MERGE_CONFLICTS_DETECTED: Merge conflicts found, attempting automatic resolution | Target: ${targetBranch} | Strategy: Auto-resolve version files`);
-
-                                    // Get list of conflicted files
-                                    const { stdout: conflictedFiles } = await run('git diff --name-only --diff-filter=U');
-                                    const conflicts = conflictedFiles.trim().split('\n').filter(Boolean);
-
-                                    logger.verbose(`MERGE_CONFLICTS_LIST: Conflicted files detected | Files: ${conflicts.join(', ')} | Count: ${conflicts.length}`);
-
-                                    // Check if conflicts are only in package.json (package-lock.json is gitignored)
-                                    const versionFiles = ['package.json'];
-                                    const nonVersionConflicts = conflicts.filter(f => !versionFiles.includes(f));
-
-                                    if (nonVersionConflicts.length > 0) {
-                                        logger.error(`MERGE_AUTO_RESOLVE_FAILED: Cannot auto-resolve conflicts in non-version files | Files: ${nonVersionConflicts.join(', ')} | Count: ${nonVersionConflicts.length} | Resolution: Manual intervention required`);
-                                        logger.error('');
-                                        logger.error('CONFLICT_RESOLUTION_REQUIRED: Manual steps to resolve conflicts:');
-                                        logger.error('   Step 1: Resolve conflicts in the files listed above');
-                                        logger.error('   Step 2: Stage resolved files | Command: git add <resolved-files>');
-                                        logger.error('   Step 3: Complete merge commit | Command: git commit');
-                                        logger.error('   Step 4: Resume publish process | Command: kodrdriv publish');
-                                        logger.error('');
-                                        throw new Error(`Merge conflicts in non-version files. Please resolve manually.`);
-                                    }
-
-                                    // Auto-resolve version conflicts by accepting current branch versions
-                                    // (keep our working branch's version, which is likely already updated)
-                                    logger.info(`MERGE_AUTO_RESOLVING: Automatically resolving version conflicts | Strategy: Keep current branch versions | Files: ${versionFiles.join(', ')}`);
-                                    for (const file of conflicts) {
-                                        if (versionFiles.includes(file)) {
-                                            await run(`git checkout --ours ${file}`);
-                                            await run(`git add ${file}`);
-                                            logger.verbose(`MERGE_FILE_RESOLVED: Resolved file using current branch version | File: ${file} | Strategy: checkout --ours`);
-                                        }
-                                    }
-
-                                    // Complete the merge
-                                    await run(`git commit --no-edit -m "Merge ${targetBranch} to sync before version bump (auto-resolved version conflicts)"`);
-                                    logger.info(`MERGE_AUTO_RESOLVE_SUCCESS: Successfully auto-resolved version conflicts and completed merge | Target: ${targetBranch} | Files: ${versionFiles.join(', ')}`);
-                                    mergeSucceeded = true;
-                                } else {
-                                // Not a conflict error, re-throw
-                                    throw mergeError;
-                                }
-                            }
-
-                            // Only run npm install if merge actually happened
-                            if (mergeSucceeded) {
-                            // Run npm install to update package-lock.json based on merged package.json
-                                logger.info('POST_MERGE_NPM_INSTALL: Running npm install after merge | Purpose: Update package-lock.json based on merged package.json | Command: npm install');
-                                await run('npm install');
-                                logger.info('POST_MERGE_NPM_COMPLETE: npm install completed successfully | Status: Dependencies synchronized');
-
-                                // Commit any changes from npm install (e.g., package-lock.json updates)
-                                const { stdout: mergeChangesStatus } = await run('git status --porcelain');
-                                if (mergeChangesStatus.trim()) {
-                                    logger.verbose('POST_MERGE_CHANGES_DETECTED: Changes detected after npm install | Action: Staging for commit | Command: git add');
-                                    // Skip package-lock.json as it's in .gitignore to avoid private registry refs
-                                    const filesToStagePostMerge = 'package.json';
-                                    await run(`git add ${filesToStagePostMerge}`);
-
-                                    if (await Diff.hasStagedChanges()) {
-                                        logger.verbose('POST_MERGE_COMMIT: Committing post-merge changes | Files: ' + filesToStagePostMerge + ' | Purpose: Finalize merge');
-                                        await Commit.commit(runConfig);
-                                    }
-                                }
-                            }
-                        }
-                    } catch (error: any) {
-                    // Only catch truly unexpected errors here
-                        logger.error(`MERGE_UNEXPECTED_ERROR: Unexpected error during merge process | Error: ${error.message} | Target: ${targetBranch} | Action: Aborting publish`);
-                        throw error;
-                    }
-                }, `merge ${targetBranch} into current branch`);
-            }
-        }
+        // STEP 3: Pre-merge target into working (REMOVED)
+        // This step was previously used to merge target branch into working before creating PR.
+        // It's no longer needed because:
+        // 1. check-development already ensures branches are in sync
+        // 2. Post-publish sync handles branch synchronization
+        // 3. Squash merge workflow makes pre-merge unnecessary
+        // If branches have diverged, the PR will show conflicts that need manual resolution.
 
         // STEP 4: Determine and set target version AFTER checks, dependency commit, and target branch merge
         logger.info('Determining target version...');
@@ -1363,49 +1220,17 @@ export const execute = async (runConfig: Config): Promise<void> => {
         }
     }
 
-    // Update package.json on target branch to release version and commit
-    // This ensures the tag points to a commit with the correct release version
+    // Read the version from target branch for tag creation
+    // After squash merge, this should match the version we set on the working branch
     if (!isDryRun) {
-        logger.info(`PUBLISH_VERSION_UPDATE_TARGET: Updating package.json on target branch to release version | Version: ${newVersion} | Branch: ${targetBranch}`);
-
-        // Read current package.json on target branch
         const targetPackageJsonContents = await storage.readFile('package.json', 'utf-8');
         const targetPackageJson = safeJsonParse(targetPackageJsonContents, 'package.json');
-
-        // Check if version update is needed
-        if (targetPackageJson.version !== newVersion) {
-            logger.info(`PUBLISH_VERSION_MISMATCH: Version mismatch detected on target | Current: ${targetPackageJson.version} | Expected: ${newVersion} | Action: Updating`);
-
-            // Update version in package.json
-            targetPackageJson.version = newVersion;
-            await storage.writeFile('package.json', JSON.stringify(targetPackageJson, null, 2) + '\n', 'utf-8');
-            logger.info(`PUBLISH_VERSION_UPDATED: Updated package.json version on target branch | Version: ${newVersion} | Branch: ${targetBranch}`);
-
-            // Stage and commit the version update
-            await runGitWithLock(process.cwd(), async () => {
-                await runSecure('git', ['add', 'package.json']);
-            }, 'stage version update on target');
-
-            // Check if there are staged changes before committing
-            if (await Diff.hasStagedChanges()) {
-                logger.info('PUBLISH_VERSION_COMMITTING: Committing version update to target branch | Purpose: Ensure tag points to correct version');
-                await runGitWithLock(process.cwd(), async () => {
-                    await Commit.commit(runConfig);
-                }, 'commit version update on target');
-                logger.info('PUBLISH_VERSION_COMMITTED: Version update committed successfully');
-
-                // Push the version update to remote
-                logger.info(`PUBLISH_VERSION_PUSHING: Pushing version update to remote | Branch: ${targetBranch} | Remote: origin`);
-                await runGitWithLock(process.cwd(), async () => {
-                    await runSecure('git', ['push', 'origin', targetBranch]);
-                }, `push version update to ${targetBranch}`);
-                logger.info('PUBLISH_VERSION_PUSHED: Version update pushed to remote successfully');
-            } else {
-                logger.verbose('PUBLISH_VERSION_NO_CHANGES: No changes to commit (version already correct)');
-            }
-        } else {
-            logger.info(`PUBLISH_VERSION_CORRECT: Version already correct on target branch | Version: ${newVersion} | Branch: ${targetBranch}`);
-        }
+        const targetVersion = targetPackageJson.version;
+        
+        logger.info(`PUBLISH_VERSION_TARGET: Version on target branch after merge | Version: ${targetVersion} | Branch: ${targetBranch}`);
+        
+        // Use the version from target branch for tagging (should match newVersion from working branch)
+        newVersion = targetVersion;
     }
 
     // Now create and push the tag on the target branch
@@ -1596,8 +1421,8 @@ export const execute = async (runConfig: Config): Promise<void> => {
             try {
                 // Verify that remote working branch is ancestor of main (safety check)
                 try {
-                    await run(`git fetch origin ${currentBranch}`);
-                    await run(`git merge-base --is-ancestor origin/${currentBranch} ${targetBranch}`);
+                    await run(`git fetch origin ${currentBranch}`, { suppressErrorLogging: true });
+                    await run(`git merge-base --is-ancestor origin/${currentBranch} ${targetBranch}`, { suppressErrorLogging: true });
                     logger.verbose(`✓ Safety check passed: origin/${currentBranch} is ancestor of ${targetBranch}`);
                 } catch {
                     // Remote branch might not exist yet, or already in sync - both OK

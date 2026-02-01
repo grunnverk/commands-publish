@@ -15,7 +15,7 @@ import { scanForPackageJsonFiles } from '@grunnverk/tree-core';
 import { getGitStatusSummary, getLinkedDependencies, run } from '@grunnverk/git-tools';
 import { getOctokit } from '@grunnverk/github-tools';
 import { isDevelopmentVersion } from '@grunnverk/core';
-import { readFile } from 'fs/promises';
+import { readFile, access } from 'fs/promises';
 import * as path from 'path';
 
 /**
@@ -27,6 +27,97 @@ const DEFAULT_EXCLUDE_SUBPROJECTS = [
     'examples/',
     'test-*/',
 ];
+
+/**
+ * Checks if .gitignore contains required patterns to prevent publishing
+ * development artifacts and sensitive files.
+ */
+async function checkGitignorePatterns(directory: string, checks: any): Promise<void> {
+    const logger = getLogger();
+    const gitignorePath = path.join(directory, '.gitignore');
+
+    // Required patterns that must be present in .gitignore
+    const requiredPatterns = [
+        'node_modules',
+        'dist',
+        'package-lock.json',
+        '.env',
+        'output/',
+        'coverage',
+        '.kodrdriv*'
+    ];
+
+    // Check if .gitignore exists
+    try {
+        await access(gitignorePath);
+    } catch {
+        checks.gitignore.passed = false;
+        checks.gitignore.issues.push('.gitignore file not found');
+        checks.gitignore.issues.push(`Create .gitignore with patterns: ${requiredPatterns.join(', ')}`);
+        return;
+    }
+
+    // Read .gitignore content
+    let gitignoreContent: string;
+    try {
+        gitignoreContent = await readFile(gitignorePath, 'utf-8');
+    } catch (error: any) {
+        checks.gitignore.passed = false;
+        checks.gitignore.issues.push(`Failed to read .gitignore: ${error.message}`);
+        return;
+    }
+
+    // Parse .gitignore into lines, ignoring comments and empty lines
+    const gitignoreLines = gitignoreContent
+        .split('\n')
+        .map(line => line.trim())
+        .filter(line => line && !line.startsWith('#'));
+
+    // Check for missing patterns
+    const missingPatterns: string[] = [];
+    for (const pattern of requiredPatterns) {
+        // Check if the pattern exists in any of the gitignore lines
+        const found = gitignoreLines.some(line => {
+            // Exact match
+            if (line === pattern) return true;
+
+            // Pattern with wildcard - check if the pattern or any matching line exists
+            if (pattern.includes('*')) {
+                const basePattern = pattern.replace('*', '');
+                // Accept exact wildcard pattern, base pattern, or any line starting with base
+                return line === pattern || line === basePattern || line.startsWith(basePattern);
+            }
+
+            // Pattern with trailing slash - check both with and without slash
+            if (pattern.endsWith('/')) {
+                const basePattern = pattern.slice(0, -1);
+                return line === basePattern || line === pattern || line.startsWith(pattern);
+            }
+
+            // Line with trailing slash - check if it matches the pattern (e.g., "node_modules/" matches "node_modules")
+            if (line.endsWith('/')) {
+                const lineBase = line.slice(0, -1);
+                return lineBase === pattern || line.startsWith(pattern + '/');
+            }
+
+            return false;
+        });
+
+        if (!found) {
+            missingPatterns.push(pattern);
+        }
+    }
+
+    // Report missing patterns (relaxed check - allow variations)
+    const criticalMissing = missingPatterns.filter(p => !p.includes('coverage') && p !== 'package-lock.json');
+    if (criticalMissing.length > 0) {
+        checks.gitignore.passed = false;
+        checks.gitignore.issues.push(`Missing required patterns: ${criticalMissing.join(', ')}`);
+        checks.gitignore.issues.push('These patterns prevent committing build artifacts and sensitive files');
+    }
+
+    logger.debug(`Gitignore check: ${checks.gitignore.passed ? 'passed' : 'failed'}`);
+}
 
 /**
  * Execute check-development command
@@ -62,6 +153,7 @@ export async function execute(config: Config): Promise<string> {
     logger.info(`Detected ${isTree ? 'tree' : 'single package'} with ${packageJsonFiles.length} package(s)`);
 
     const checks = {
+        gitignore: { passed: true, issues: [] as string[] },
         branch: { passed: true, issues: [] as string[] },
         remoteSync: { passed: true, issues: [] as string[] },
         mergeConflicts: { passed: true, issues: [] as string[], warnings: [] as string[] },
@@ -72,6 +164,9 @@ export async function execute(config: Config): Promise<string> {
     };
 
     const packagesToCheck = isTree ? packageJsonFiles : [path.join(directory, 'package.json')];
+
+    // Check .gitignore patterns (required for publish to succeed)
+    await checkGitignorePatterns(directory, checks);
 
     // Build a set of all local package names for link status checking
     const localPackageNames = new Set<string>();
@@ -155,20 +250,20 @@ export async function execute(config: Config): Promise<string> {
 
                     // Abort the test merge (only if there's actually a merge in progress)
                     try {
-                        await run('git merge --abort', { cwd: pkgDir });
+                        await run('git merge --abort', { cwd: pkgDir, suppressErrorLogging: true });
                     } catch {
                         // Ignore - there might not be a merge to abort if it was a fast-forward
                     }
                 } catch (mergeError: any) {
                     // Abort any partial merge
                     try {
-                        await run('git merge --abort', { cwd: pkgDir });
+                        await run('git merge --abort', { cwd: pkgDir, suppressErrorLogging: true });
                     } catch {
                         // Ignore abort errors
                     }
 
                     // If merge failed, there are likely conflicts
-                    if (mergeError.message?.includes('CONFLICT') || mergeError.stderr?.includes('CONFLICT')) {
+                    if (mergeError.message?.includes('CONFLICT') || mergeError.stderr?.includes('CONFLICT') || mergeError.stdout?.includes('CONFLICT')) {
                         checks.mergeConflicts.passed = false;
                         checks.mergeConflicts.issues.push(
                             `${pkgName}: Merge conflicts detected with ${targetBranch} branch`
@@ -198,7 +293,7 @@ export async function execute(config: Config): Promise<string> {
             // Check if base version exists on npm
             const baseVersion = version.split('-')[0];
             try {
-                const { stdout } = await run(`npm view ${pkgName}@${baseVersion} version`, { cwd: pkgDir });
+                const { stdout } = await run(`npm view ${pkgName}@${baseVersion} version`, { cwd: pkgDir, suppressErrorLogging: true });
                 if (stdout.trim() === baseVersion) {
                     checks.devVersion.passed = false;
                     checks.devVersion.issues.push(
@@ -348,7 +443,8 @@ export async function execute(config: Config): Promise<string> {
     // Build summary - linkStatus and releaseWorkflow are not included in allPassed (recommendations)
     // mergeConflicts is ALWAYS checked (critical for preventing post-merge failures)
     // openPRs is only checked when validateRelease is true
-    const allPassed = checks.branch.passed &&
+    const allPassed = checks.gitignore.passed &&
+                     checks.branch.passed &&
                      checks.remoteSync.passed &&
                      checks.mergeConflicts.passed &&
                      checks.devVersion.passed &&
@@ -369,6 +465,7 @@ export async function execute(config: Config): Promise<string> {
     if (allPassed) {
         summary += `✅ Status: READY FOR DEVELOPMENT\n\n`;
         summary += `All required checks passed:\n`;
+        summary += `  ✓ Gitignore patterns\n`;
         summary += `  ✓ Branch status\n`;
         summary += `  ✓ Remote sync\n`;
         summary += `  ✓ No merge conflicts with main\n`;
@@ -381,6 +478,12 @@ export async function execute(config: Config): Promise<string> {
         }
     } else {
         summary += `⚠️  Status: NOT READY\n\n`;
+
+        if (!checks.gitignore.passed) {
+            summary += `❌ Gitignore Issues:\n`;
+            checks.gitignore.issues.forEach(issue => summary += `   - ${issue}\n`);
+            summary += `\n`;
+        }
 
         if (!checks.branch.passed) {
             summary += `❌ Branch Issues:\n`;
@@ -397,6 +500,13 @@ export async function execute(config: Config): Promise<string> {
         if (!checks.mergeConflicts.passed) {
             summary += `❌ Merge Conflict Issues:\n`;
             checks.mergeConflicts.issues.forEach(issue => summary += `   - ${issue}\n`);
+            summary += `\n`;
+            summary += `   To resolve merge conflicts:\n`;
+            summary += `   1. Fetch latest: git fetch origin main\n`;
+            summary += `   2. Merge main into your branch: git merge origin/main\n`;
+            summary += `   3. Resolve conflicts in your editor\n`;
+            summary += `   4. Commit the merge: git add . && git commit\n`;
+            summary += `   5. Run check-development again to verify\n`;
             summary += `\n`;
         }
 

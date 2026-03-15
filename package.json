@@ -43,10 +43,10 @@
     "node": ">=24.0.0"
   },
   "dependencies": {
-    "@grunnverk/ai-service": "^1.5.7",
-    "@grunnverk/commands-git": "^1.5.12",
-    "@grunnverk/commands-tree": "^1.5.10",
-    "@grunnverk/core": "^1.5.12",
+    "@grunnverk/ai-service": "^1.5.8",
+    "@grunnverk/commands-git": "^1.5.13",
+    "@grunnverk/commands-tree": "^1.5.11",
+    "@grunnverk/core": "^1.5.13",
     "@grunnverk/git-tools": "^1.5.16",
     "@grunnverk/github-tools": "^1.5.8",
     "@grunnverk/shared": "^1.5.8",

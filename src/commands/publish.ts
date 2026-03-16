@@ -8,6 +8,7 @@ import { getLogger, getDryRunLogger, Config, PullRequest, Diff, getOutputPath, c
 import { run, runWithDryRunSupport, runSecure, validateGitRef, safeJsonParse, validatePackageJson, isBranchInSyncWithRemote, safeSyncBranchWithRemote, localBranchExists, remoteBranchExists } from '@grunnverk/git-tools';
 import * as GitHub from '@grunnverk/github-tools';
 import { createStorage, incrementPatchVersion, calculateTargetVersion } from '@grunnverk/shared';
+import { enforceCompatibilityGateOrThrow } from './compatibility-gate';
 
 const scanNpmrcForEnvVars = async (storage: any): Promise<string[]> => {
     const logger = getLogger();
@@ -53,7 +54,6 @@ const checkGitignorePatterns = async (storage: any, isDryRun: boolean): Promise<
     const requiredPatterns = [
         'node_modules',
         'dist',
-        'package-lock.json',
         '.env',
         'output/',
         'coverage',
@@ -126,7 +126,7 @@ const checkGitignorePatterns = async (storage: any, isDryRun: boolean): Promise<
     }
 
     // Report missing patterns (relaxed check - allow variations)
-    const criticalMissing = missingPatterns.filter(p => !p.includes('coverage') && p !== 'package-lock.json');
+    const criticalMissing = missingPatterns.filter(p => !p.includes('coverage'));
     if (criticalMissing.length > 0) {
         logger.error('GITIGNORE_INCOMPLETE: Required patterns missing from .gitignore | Path: ' + gitignorePath + ' | Count: ' + criticalMissing.length);
         logger.error('');
@@ -148,6 +148,95 @@ const checkGitignorePatterns = async (storage: any, isDryRun: boolean): Promise<
     }
 
     logger.verbose('GITIGNORE_VERIFIED: All required patterns present in .gitignore | Path: ' + gitignorePath + ' | Status: valid');
+};
+
+const isPathTrackedByGit = async (relativePath: string): Promise<boolean> => {
+    try {
+        await run(`git ls-files --error-unmatch ${relativePath}`, { suppressErrorLogging: true });
+        return true;
+    } catch {
+        return false;
+    }
+};
+
+const isPathIgnoredByGit = async (relativePath: string): Promise<boolean> => {
+    try {
+        await run(`git check-ignore -q ${relativePath}`, { suppressErrorLogging: true });
+        return true;
+    } catch {
+        return false;
+    }
+};
+
+const checkLockfilePolicy = async (
+    storage: any,
+    runConfig: Config,
+    isDryRun: boolean
+): Promise<void> => {
+    const logger = getDryRunLogger(isDryRun);
+    const lockfilePolicy = (runConfig.publish as any)?.lockfilePolicy || 'ignore';
+    const packageLockPath = path.join(process.cwd(), 'package-lock.json');
+    const relativePath = 'package-lock.json';
+
+    if (isDryRun) {
+        logger.info(`LOCKFILE_POLICY_CHECK: Would enforce lockfile policy | Policy: ${lockfilePolicy} | File: ${relativePath}`);
+        return;
+    }
+
+    const exists = await storage.exists(packageLockPath);
+    const isTracked = await isPathTrackedByGit(relativePath);
+    const isIgnored = await isPathIgnoredByGit(relativePath);
+
+    if (lockfilePolicy === 'ignore') {
+        if (isTracked) {
+            logger.error(`LOCKFILE_POLICY_VIOLATION: package-lock.json is tracked but policy is "ignore" | Policy: ${lockfilePolicy} | File: ${relativePath}`);
+            logger.error('LOCKFILE_POLICY_REMEDIATION: Move repository to lockfile-ignore policy:');
+            logger.error('   Step 1: Add package-lock.json to .gitignore');
+            logger.error('   Step 2: Stop tracking lockfile | Command: git rm --cached package-lock.json');
+            logger.error('   Step 3: Commit policy migration | Command: git commit -m "chore: enforce lockfile ignore policy"');
+            logger.error('   Alternative: set publish.lockfilePolicy to "commit" if this repository must commit lockfiles');
+            throw new Error('Lockfile policy violation: package-lock.json is tracked but publish.lockfilePolicy is "ignore".');
+        }
+
+        if (exists && !isIgnored) {
+            logger.error(`LOCKFILE_POLICY_VIOLATION: package-lock.json exists but is not ignored while policy is "ignore" | Policy: ${lockfilePolicy} | File: ${relativePath}`);
+            logger.error('LOCKFILE_POLICY_REMEDIATION: Add package-lock.json to .gitignore or switch publish.lockfilePolicy to "commit".');
+            throw new Error('Lockfile policy violation: package-lock.json exists and is not ignored while publish.lockfilePolicy is "ignore".');
+        }
+    } else if (lockfilePolicy === 'commit') {
+        if (!exists) {
+            logger.error(`LOCKFILE_POLICY_VIOLATION: package-lock.json is missing but policy is "commit" | Policy: ${lockfilePolicy} | File: ${relativePath}`);
+            logger.error('LOCKFILE_POLICY_REMEDIATION: Generate and commit lockfile | Command: npm install --package-lock-only --no-audit --no-fund');
+            throw new Error('Lockfile policy violation: package-lock.json is required when publish.lockfilePolicy is "commit".');
+        }
+
+        if (!isTracked) {
+            logger.error(`LOCKFILE_POLICY_VIOLATION: package-lock.json is not tracked but policy is "commit" | Policy: ${lockfilePolicy} | File: ${relativePath}`);
+            logger.error('LOCKFILE_POLICY_REMEDIATION: Stage and commit lockfile | Command: git add package-lock.json && git commit -m "chore: track lockfile"');
+            throw new Error('Lockfile policy violation: package-lock.json must be tracked when publish.lockfilePolicy is "commit".');
+        }
+
+        if (isIgnored) {
+            logger.error(`LOCKFILE_POLICY_VIOLATION: package-lock.json is ignored but policy is "commit" | Policy: ${lockfilePolicy} | File: ${relativePath}`);
+            logger.error('LOCKFILE_POLICY_REMEDIATION: Remove package-lock.json from .gitignore so lockfile changes can be committed.');
+            throw new Error('Lockfile policy violation: package-lock.json is ignored while publish.lockfilePolicy is "commit".');
+        }
+    }
+
+    logger.verbose(`LOCKFILE_POLICY_VERIFIED: Lockfile policy check passed | Policy: ${lockfilePolicy} | File: ${relativePath}`);
+};
+
+const getFilesToStageForPublish = async (
+    storage: any,
+    lockfilePolicy: 'ignore' | 'commit'
+): Promise<string> => {
+    if (lockfilePolicy === 'commit') {
+        const packageLockPath = path.join(process.cwd(), 'package-lock.json');
+        if (await storage.exists(packageLockPath)) {
+            return 'package.json package-lock.json';
+        }
+    }
+    return 'package.json';
 };
 
 /**
@@ -260,10 +349,13 @@ const runPrechecks = async (runConfig: Config, targetBranch?: string): Promise<v
     // Check .gitignore patterns first (critical requirement)
     logger.info('PRECHECK_GITIGNORE: Verifying .gitignore contains required patterns | Requirement: Must ignore development artifacts and sensitive files');
     if (isDryRun) {
-        logger.info('PRECHECK_GITIGNORE: Would verify .gitignore patterns | Mode: dry-run | Patterns: node_modules, dist, package-lock.json, .env, output/, coverage, .kodrdriv*');
+        logger.info('PRECHECK_GITIGNORE: Would verify .gitignore patterns | Mode: dry-run | Patterns: node_modules, dist, .env, output/, coverage, .kodrdriv*');
     } else {
         await checkGitignorePatterns(storage, isDryRun);
     }
+
+    logger.info(`PRECHECK_LOCKFILE_POLICY: Enforcing lockfile policy | Policy: ${(runConfig.publish as any)?.lockfilePolicy || 'ignore'} | Config: publish.lockfilePolicy`);
+    await checkLockfilePolicy(storage, runConfig, isDryRun);
 
     // Check if we're in a git repository
     try {
@@ -556,6 +648,7 @@ export const execute = async (runConfig: Config): Promise<void> => {
     const isDryRun = runConfig.dryRun || false;
     const logger = getDryRunLogger(isDryRun);
     const storage = createStorage();
+    const lockfilePolicy: 'ignore' | 'commit' = ((runConfig.publish as any)?.lockfilePolicy || 'ignore');
 
     // Get current branch for branch-dependent targeting
     let currentBranch: string;
@@ -601,6 +694,12 @@ export const execute = async (runConfig: Config): Promise<void> => {
         await handleTargetBranchSyncRecovery(runConfig, targetBranch);
         return; // Exit after sync operation
     }
+
+    // Enforce strict compatibility checks up front before expensive publish operations.
+    await enforceCompatibilityGateOrThrow(runConfig, {
+        operation: 'publish',
+        profile: ((runConfig.publish as any)?.compatibilityProfile as 'quick' | 'strict') || 'strict',
+    });
 
     // OPTIMIZATION: Early check if release is necessary BEFORE expensive operations
     // This can save 2-4 minutes for packages with no changes by skipping:
@@ -754,7 +853,7 @@ export const execute = async (runConfig: Config): Promise<void> => {
             logger.verbose('NPM_LINK_CHECK: Scanning package-lock.json for npm link references | File: package-lock.json | Purpose: Remove development symlinks before publish');
             await cleanupNpmLinkReferences(isDryRun);
         } else {
-            logger.verbose('NPM_LINK_CLEANUP_SKIPPED: Skipping package-lock cleanup (tree publish workflow) | Reason: package-lock.json not included in npm publish');
+            logger.verbose('NPM_LINK_CLEANUP_SKIPPED: Skipping package-lock cleanup | Reason: publish.skipLinkCleanup enabled');
         }
 
         // Update inter-project dependencies if --update-deps flag is present
@@ -788,9 +887,8 @@ export const execute = async (runConfig: Config): Promise<void> => {
         await runWithDryRunSupport('npm run prepublishOnly', isDryRun, {}, true); // Use inherited stdio
 
         // STEP 2: Commit dependency updates if any (still no version bump)
-        logger.verbose('DEPS_STAGING: Staging dependency updates for commit | Files: package.json | Command: git add | Note: Version bump not yet applied, package-lock.json ignored');
-        // Skip package-lock.json as it's in .gitignore to avoid private registry refs
-        const filesToStage = 'package.json';
+        const filesToStage = await getFilesToStageForPublish(storage, lockfilePolicy);
+        logger.verbose(`DEPS_STAGING: Staging dependency updates for commit | Files: ${filesToStage} | Command: git add | LockfilePolicy: ${lockfilePolicy}`);
 
         // Wrap git operations with repository lock to prevent .git/index.lock conflicts
         await runGitWithLock(process.cwd(), async () => {
@@ -966,9 +1064,8 @@ export const execute = async (runConfig: Config): Promise<void> => {
         }
 
         // STEP 5: Commit version bump as a separate commit
-        logger.verbose('Staging version bump for commit');
-        // Skip package-lock.json as it's in .gitignore to avoid private registry refs
-        const filesToStageVersionBump = 'package.json';
+        const filesToStageVersionBump = await getFilesToStageForPublish(storage, lockfilePolicy);
+        logger.verbose(`VERSION_STAGING: Staging version bump for commit | Files: ${filesToStageVersionBump} | LockfilePolicy: ${lockfilePolicy}`);
 
         // Wrap git operations with lock
         await runGitWithLock(process.cwd(), async () => {
@@ -1478,8 +1575,7 @@ export const execute = async (runConfig: Config): Promise<void> => {
 
         // Bump to next development version
         // Note: We manually update package.json instead of using npm version to avoid
-        // npm's automatic "git add package.json package-lock.json" which fails when
-        // package-lock.json is gitignored
+        // npm's automatic staging behavior and to keep staging aligned with lockfile policy.
         logger.info(`PUBLISH_DEV_VERSION_BUMPING: Bumping to next development version | Tag: ${versionTag} | Purpose: Prepare for next cycle`);
         try {
             // Read current package.json
@@ -1502,9 +1598,10 @@ export const execute = async (runConfig: Config): Promise<void> => {
 
             logger.info(`PUBLISH_DEV_VERSION_BUMPED: Version bumped successfully | New Version: ${newVersion} | Type: development | Status: completed`);
 
-            // Manually commit the version bump (package-lock.json is ignored)
+            const filesToStageDevBump = await getFilesToStageForPublish(storage, lockfilePolicy);
+            // Manually commit the version bump and lockfile according to lockfile policy
             await runGitWithLock(process.cwd(), async () => {
-                await run('git add package.json');
+                await run(`git add ${filesToStageDevBump}`);
                 await run(`git commit -m "chore: bump to ${newVersion}"`);
             }, 'commit dev version bump');
         } catch (versionError: any) {

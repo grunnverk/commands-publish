@@ -49,6 +49,41 @@ await publish(config);
 await release(config);
 ```
 
+## Lockfile Policy
+
+`kodrdriv publish` enforces `publish.lockfilePolicy` as the canonical lockfile rule.
+
+- `ignore` (default): `package-lock.json` must not be tracked and must be ignored.
+- `commit`: `package-lock.json` must exist, be tracked, and not be ignored.
+
+Example config:
+
+```json
+{
+  "publish": {
+    "lockfilePolicy": "ignore"
+  }
+}
+```
+
+### Migration
+
+Move repository to `ignore` policy:
+
+```bash
+echo "package-lock.json" >> .gitignore
+git rm --cached package-lock.json
+git commit -m "chore: enforce lockfile ignore policy"
+```
+
+Move repository to `commit` policy:
+
+```bash
+npm install --package-lock-only --no-audit --no-fund
+git add package-lock.json
+git commit -m "chore: track lockfile"
+```
+
 ## Dependencies
 
 - `@grunnverk/core` - Core utilities and types

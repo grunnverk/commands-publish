@@ -40,7 +40,6 @@ async function checkGitignorePatterns(directory: string, checks: any): Promise<v
     const requiredPatterns = [
         'node_modules',
         'dist',
-        'package-lock.json',
         '.env',
         'output/',
         'coverage',
@@ -109,7 +108,7 @@ async function checkGitignorePatterns(directory: string, checks: any): Promise<v
     }
 
     // Report missing patterns (relaxed check - allow variations)
-    const criticalMissing = missingPatterns.filter(p => !p.includes('coverage') && p !== 'package-lock.json');
+    const criticalMissing = missingPatterns.filter(p => !p.includes('coverage'));
     if (criticalMissing.length > 0) {
         checks.gitignore.passed = false;
         checks.gitignore.issues.push(`Missing required patterns: ${criticalMissing.join(', ')}`);
@@ -129,10 +128,14 @@ export async function execute(config: Config): Promise<string> {
                      config.tree?.directories?.[0] ||
                      process.cwd();
 
-    // Get validateRelease flag - controls merge conflicts and open PRs checks
-    const validateRelease = (config as any).validateReleaseWorkflow ?? false;
+    // Profile-driven gate behavior: quick is default, strict enables release-centric checks.
+    const profile: 'quick' | 'strict' = (config as any).compatibility?.profile ||
+        (config as any).compatibilityProfile ||
+        ((config as any).validateReleaseWorkflow ? 'strict' : 'quick');
+    // validateRelease controls open PR and release workflow checks.
+    const validateRelease = profile === 'strict' || (config as any).validateReleaseWorkflow === true;
 
-    logger.info(`Checking development readiness in ${directory}${validateRelease ? ' (full release validation)' : ' (quick check)'}`);
+    logger.info(`Checking development readiness in ${directory}${validateRelease ? ' (full release validation)' : ' (quick check)'} | Profile: ${profile}`);
 
     // Build exclusion patterns
     const excludedPatterns = [

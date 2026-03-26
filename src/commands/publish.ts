@@ -707,7 +707,13 @@ export const execute = async (runConfig: Config): Promise<void> => {
     // - current branch sync (~30-60s)
     // - target branch setup (~30-60s)
     // - prechecks (~30-60s)
-    if (!isDryRun) {
+    //
+    // However, skip this check for the working branch — we always need to publish
+    // from working to propagate new versions through the dependency chain.
+    // The necessity check is designed for stable release workflows where unchanged
+    // packages should be skipped, but that breaks tree publish for dev prereleases.
+    const skipEarlyNecessityCheck = (currentBranch === 'working' || currentBranch === 'development');
+    if (!isDryRun && !skipEarlyNecessityCheck) {
         logger.info('RELEASE_NECESSITY_CHECK_EARLY: Quick check if release is required | Comparison: current branch vs target | Target: ' + targetBranch + ' | Purpose: Skip expensive operations for unchanged packages');
         try {
             const necessity = await isReleaseNecessaryComparedToTarget(targetBranch, isDryRun);

@@ -65,6 +65,7 @@
     "@typescript-eslint/eslint-plugin": "^8.39.1",
     "@typescript-eslint/parser": "^8.47.0",
     "@vitest/coverage-v8": "^4.0.13",
+    "ajv": "^8.18.0",
     "esbuild": "0.27.2",
     "eslint": "^9.33.0",
     "eslint-plugin-import": "^2.32.0",

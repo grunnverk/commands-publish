@@ -1,6 +1,6 @@
 {
   "name": "@grunnverk/commands-publish",
-  "version": "1.5.12",
+  "version": "1.5.13",
   "description": "Publishing workflow commands for kodrdriv (development, publish, release)",
   "main": "dist/index.js",
   "type": "module",
@@ -25,7 +25,7 @@
     "test": "rm -rf coverage && vitest run --coverage",
     "lint": "eslint . --ext .ts",
     "lint:fix": "eslint . --ext .ts --fix",
-    "clean": "rm -rf dist",
+    "clean": "rm -rf dist coverage",
     "precommit": "npm run lint && npm run build && npm run test",
     "prepublishOnly": "npm run clean && npm run lint && npm run build && npm run test"
   },
@@ -45,7 +45,7 @@
   "dependencies": {
     "@grunnverk/ai-service": "^1.5.8",
     "@grunnverk/commands-git": "^1.5.14",
-    "@grunnverk/commands-tree": "^1.5.12",
+    "@grunnverk/commands-tree": "^1.5.13",
     "@grunnverk/core": "^1.5.14",
     "@grunnverk/git-tools": "^1.5.16",
     "@grunnverk/github-tools": "^1.5.8",
@@ -65,6 +65,7 @@
     "@typescript-eslint/eslint-plugin": "^8.39.1",
     "@typescript-eslint/parser": "^8.47.0",
     "@vitest/coverage-v8": "^4.0.13",
+    "ajv": "^8.18.0",
     "esbuild": "0.27.2",
     "eslint": "^9.33.0",
     "eslint-plugin-import": "^2.32.0",

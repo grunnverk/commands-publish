@@ -9,6 +9,7 @@ import { run, runWithDryRunSupport, runSecure, validateGitRef, safeJsonParse, va
 import * as GitHub from '@grunnverk/github-tools';
 import { createStorage, incrementPatchVersion, calculateTargetVersion } from '@grunnverk/shared';
 import { enforceCompatibilityGateOrThrow } from './compatibility-gate';
+import { writeVersionWithWorkspaceSupport } from '../utils/workspace';
 
 const scanNpmrcForEnvVars = async (storage: any): Promise<string[]> => {
     const logger = getLogger();
@@ -927,9 +928,11 @@ export const execute = async (runConfig: Config): Promise<void> => {
         // STEP 4: Determine and set target version AFTER checks, dependency commit, and target branch merge
         logger.info('Determining target version...');
 
+        let filesToStageVersionBump: string;
         if (isDryRun) {
             logger.info('Would determine target version and update package.json');
             newVersion = '1.0.0'; // Mock version for dry run
+            filesToStageVersionBump = await getFilesToStageForPublish(storage, lockfilePolicy);
         } else {
             const packageJsonContents = await storage.readFile('package.json', 'utf-8');
             const parsed = safeJsonParse(packageJsonContents, 'package.json');
@@ -1064,13 +1067,14 @@ export const execute = async (runConfig: Config): Promise<void> => {
             }
 
             logger.info(`Bumping version from ${currentVersion} to ${newVersion}`);
-            packageJson.version = newVersion;
-            await storage.writeFile('package.json', JSON.stringify(packageJson, null, 2) + '\n', 'utf-8');
+            filesToStageVersionBump = await writeVersionWithWorkspaceSupport(newVersion, storage, logger, {
+                stagingHint: 'publish-bump',
+                lockfilePolicy
+            });
             logger.info(`Version updated in package.json: ${newVersion}`);
         }
 
         // STEP 5: Commit version bump as a separate commit
-        const filesToStageVersionBump = await getFilesToStageForPublish(storage, lockfilePolicy);
         logger.verbose(`VERSION_STAGING: Staging version bump for commit | Files: ${filesToStageVersionBump} | LockfilePolicy: ${lockfilePolicy}`);
 
         // Wrap git operations with lock
@@ -1596,19 +1600,18 @@ export const execute = async (runConfig: Config): Promise<void> => {
             // then add the prerelease tag. This ensures we don't go back to the same dev version.
             // Example: 1.0.1-dev.0 -> publish 1.0.1 -> increment to 1.0.2-dev.0 (not 1.0.1-dev.0)
             const incrementedPatchVersion = incrementPatchVersion(currentVer);
-            const newVersion = incrementPrereleaseVersion(incrementedPatchVersion, versionTag);
+            const nextDevVersion = incrementPrereleaseVersion(incrementedPatchVersion, versionTag);
 
-            // Update package.json with new version
-            validatedPkgJson.version = newVersion;
-            await storage.writeFile('package.json', JSON.stringify(validatedPkgJson, null, 2) + '\n', 'utf-8');
+            const filesToStageDevBump = await writeVersionWithWorkspaceSupport(nextDevVersion, storage, logger, {
+                stagingHint: 'publish-bump',
+                lockfilePolicy
+            });
 
-            logger.info(`PUBLISH_DEV_VERSION_BUMPED: Version bumped successfully | New Version: ${newVersion} | Type: development | Status: completed`);
+            logger.info(`PUBLISH_DEV_VERSION_BUMPED: Version bumped successfully | New Version: ${nextDevVersion} | Type: development | Status: completed`);
 
-            const filesToStageDevBump = await getFilesToStageForPublish(storage, lockfilePolicy);
-            // Manually commit the version bump and lockfile according to lockfile policy
             await runGitWithLock(process.cwd(), async () => {
                 await run(`git add ${filesToStageDevBump}`);
-                await run(`git commit -m "chore: bump to ${newVersion}"`);
+                await run(`git commit -m "chore: bump to ${nextDevVersion}"`);
             }, 'commit dev version bump');
         } catch (versionError: any) {
             logger.warn(`PUBLISH_DEV_VERSION_BUMP_FAILED: Failed to bump version | Error: ${versionError.message} | Impact: Version not updated`);

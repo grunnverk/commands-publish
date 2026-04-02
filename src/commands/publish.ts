@@ -482,7 +482,7 @@ const runPrechecks = async (runConfig: Config, targetBranch?: string): Promise<v
         }
     }
 
-    // Check if prepublishOnly script exists in package.json
+    // Check if prepublishOnly (or precommit for private packages) script exists
     logger.info('PRECHECK_PREPUBLISH: Checking for prepublishOnly script in package.json | Requirement: Must exist to run pre-flight checks | Expected: clean, lint, build, test');
     const packageJsonPath = path.join(process.cwd(), 'package.json');
 
@@ -507,11 +507,19 @@ const runPrechecks = async (runConfig: Config, targetBranch?: string): Promise<v
             }
         }
 
-        if (packageJson && !packageJson.scripts?.prepublishOnly) {
-            if (!isDryRun) {
-                throw new Error('prepublishOnly script is required in package.json but was not found. Please add a prepublishOnly script that runs your pre-flight checks (e.g., clean, lint, build, test).');
-            } else {
-                logger.warn('PREPUBLISH_SCRIPT_MISSING: No prepublishOnly script found in package.json | Mode: dry-run | Requirement: Script must exist | Expected Tasks: clean, lint, build, test | Path: ' + packageJsonPath);
+        if (packageJson) {
+            const isPrivate = (packageJson as any).private === true;
+            const hasPrepublish = !!packageJson.scripts?.prepublishOnly;
+            const hasPrecommit = !!(packageJson.scripts as any)?.precommit;
+
+            if (isPrivate && !hasPrepublish && hasPrecommit) {
+                logger.info('PRECHECK_PREPUBLISH: Private package — using precommit script instead of prepublishOnly');
+            } else if (!hasPrepublish) {
+                if (!isDryRun) {
+                    throw new Error('prepublishOnly script is required in package.json but was not found. Please add a prepublishOnly script that runs your pre-flight checks (e.g., clean, lint, build, test).');
+                } else {
+                    logger.warn('PREPUBLISH_SCRIPT_MISSING: No prepublishOnly script found in package.json | Mode: dry-run | Requirement: Script must exist | Expected Tasks: clean, lint, build, test | Path: ' + packageJsonPath);
+                }
             }
         }
     }
@@ -890,8 +898,15 @@ export const execute = async (runConfig: Config): Promise<void> => {
             await runWithDryRunSupport('npm update --legacy-peer-deps', isDryRun);
         }
 
-        logger.info('PREPUBLISH_SCRIPT_RUNNING: Executing prepublishOnly script | Script: prepublishOnly | Purpose: Run pre-flight checks (clean, lint, build, test)');
-        await runWithDryRunSupport('npm run prepublishOnly', isDryRun, {}, true); // Use inherited stdio
+        // Private packages (workspace monorepos) use precommit instead of prepublishOnly
+        const rootPkgContents = await storage.readFile('package.json', 'utf-8');
+        const rootPkg = safeJsonParse(rootPkgContents, 'package.json');
+        const isPrivateRoot = (rootPkg as any).private === true;
+        const preflightScript = (isPrivateRoot && !(rootPkg as any).scripts?.prepublishOnly && (rootPkg as any).scripts?.precommit)
+            ? 'precommit'
+            : 'prepublishOnly';
+        logger.info(`PREPUBLISH_SCRIPT_RUNNING: Executing ${preflightScript} script | Script: ${preflightScript} | Purpose: Run pre-flight checks (clean, lint, build, test)`);
+        await runWithDryRunSupport(`npm run ${preflightScript}`, isDryRun, {}, true);
 
         // STEP 2: Commit dependency updates if any (still no version bump)
         const filesToStage = await getFilesToStageForPublish(storage, lockfilePolicy);

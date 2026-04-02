@@ -406,15 +406,20 @@ export async function execute(config: Config): Promise<string> {
                     );
                 }
 
-                // Check 3: Publish dry-run succeeds
-                try {
-                    await run('npm publish --dry-run', { cwd: pkgDir });
-                    logger.debug(`${pkgName}: Publish dry-run check passed`);
-                } catch (publishError: any) {
-                    checks.releaseWorkflow.passed = false;
-                    checks.releaseWorkflow.issues.push(
-                        `${pkgName}: Publish dry-run fails - ${publishError.message || publishError}`
-                    );
+                // Check 3: Publish dry-run succeeds (skip for private packages — they
+                // publish workspace packages via CI, not npm publish from the root)
+                if (pkgJson.private) {
+                    logger.debug(`${pkgName}: Skipping publish dry-run (private package)`);
+                } else {
+                    try {
+                        await run('npm publish --dry-run', { cwd: pkgDir });
+                        logger.debug(`${pkgName}: Publish dry-run check passed`);
+                    } catch (publishError: any) {
+                        checks.releaseWorkflow.passed = false;
+                        checks.releaseWorkflow.issues.push(
+                            `${pkgName}: Publish dry-run fails - ${publishError.message || publishError}`
+                        );
+                    }
                 }
 
                 // Check 4: NPM_TOKEN environment variable

@@ -17,6 +17,7 @@
 import { getDryRunLogger, Config, findDevelopmentBranch, KODRDRIV_DEFAULTS, incrementPatchVersion, incrementMinorVersion, incrementMajorVersion } from '@grunnverk/core';
 import { run, localBranchExists, getCurrentBranch, safeJsonParse, validatePackageJson } from '@grunnverk/git-tools';
 import { createStorage } from '@grunnverk/shared';
+import { writeVersionWithWorkspaceSupport } from '../utils/workspace';
 
 /**
  * Create retroactive working branch tags for past releases
@@ -535,19 +536,15 @@ export const execute = async (runConfig: Config): Promise<string> => {
                     newVersion = `${cleanVersion}-${prereleaseTag}.0`;
                 }
 
-                // Read current package.json from working branch to update
-                const pkgJsonContents = await storage.readFile('package.json', 'utf-8');
-                const pkgJson = safeJsonParse(pkgJsonContents, 'package.json');
-                const validatedPkgJson = validatePackageJson(pkgJson, 'package.json');
-
-                // Update package.json with new version
-                validatedPkgJson.version = newVersion;
-                await storage.writeFile('package.json', JSON.stringify(validatedPkgJson, null, 2) + '\n', 'utf-8');
+                const lockfilePolicy = (runConfig.publish?.lockfilePolicy || 'ignore') as 'ignore' | 'commit';
+                const filesToStage = await writeVersionWithWorkspaceSupport(newVersion, storage, logger, {
+                    stagingHint: 'development-bump',
+                    lockfilePolicy
+                });
 
                 logger.info(`DEV_VERSION_BUMPED: Version bumped successfully | New Version: ${newVersion} | Status: completed`);
 
-                // Manually commit the version bump (package-lock.json is ignored)
-                await run('git add package.json');
+                await run(`git add ${filesToStage}`);
                 await run(`git commit -m "chore: bump to ${newVersion}"`);
 
                 // Return appropriate message based on what actions were taken
